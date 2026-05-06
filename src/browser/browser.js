@@ -6,8 +6,6 @@ const { BrowserLifecycle }  = require('./inheritance/browserLifecycle');
 
 class Browser extends BrowserLifecycle {
 
-  // ── factory ───────────────────────────────────────────────────────────
-
   static _instance = null;
 
   static getInstance(options = {}) {
@@ -15,7 +13,6 @@ class Browser extends BrowserLifecycle {
     return Browser._instance;
   }
 
-  // ── constructor ───────────────────────────────────────────────────────
 
   constructor(opts = {}) {
     super();
@@ -73,7 +70,9 @@ class Browser extends BrowserLifecycle {
     return tab;
   }
 
-  getTab(name)            { return this._cache.get(name); }
+  getTab(name) { 
+    return this._cache.get(name); 
+  }
 
   async _deleteTab(name) {
     const tab = this._cache.delete(name);

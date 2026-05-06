@@ -28,6 +28,8 @@ class BrowserLifecycle extends BrowserDLQ {
       puppeteer: puppeteerExtra,
       launchOptions: {
         headless: false,
+        devtools : true,
+        slowMo : 100,
         args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
       },
     };
