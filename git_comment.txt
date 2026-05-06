@@ -1,0 +1,17 @@
+# 1. Create a new "orphan" branch that has no connection to the previous commit history
+git checkout --orphan latest_branch
+
+# 2. Stage all current files and folders in the directory for the new commit
+git add -A
+
+# 3. Create the first commit on this new branch, effectively starting a fresh timeline
+git commit -m "Initial commit"
+
+# 4. Forcefully delete the original 'main' branch (the one with the history you want to remove)
+git branch -D main
+
+# 5. Rename the current branch (latest_branch) to 'main' so it takes its place
+git branch -m main
+
+# 6. Forcefully push the new, single-commit history to the remote server, overwriting the old history
+git push -f origin main
