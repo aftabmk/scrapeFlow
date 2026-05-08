@@ -17,9 +17,9 @@ class JobProducer {
   }
 
 
-  createJob({ id, exchange, page_url, api_url, url_builder }) {
+  createJob(job) {
     // retry intentionally not accepted — retry budget lives on DLQEvent
-    const job = { id, exchange, page_url, api_url, url_builder };
+    const { id, exchange, page_url, api_url,url_builder,refer_url} = job;
 
     try {
       if (!id || !page_url || !api_url) {

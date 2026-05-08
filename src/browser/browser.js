@@ -23,11 +23,11 @@ class Browser extends BrowserLifecycle {
     this._opts = {
       maxTabs:                 opts.maxTabs                ?? 10,
       maxMemoryMb:             opts.maxMemoryMb            ?? 400,
-      browserHealthIntervalMs: opts.browserHealthIntervalMs ?? 45_000,
       tabHealthIntervalMs:     opts.tabHealthIntervalMs    ?? 12_000,
       dlqMaxRetry:             opts.dlqMaxRetry            ?? 3,
       tabFetchTimeout:         opts.tabFetchTimeout        ?? 30_000,
       tabStaleAfterMs:         opts.tabStaleAfterMs        ?? 300_000,
+      browserHealthIntervalMs: opts.browserHealthIntervalMs ?? 45_000,
     };
 
     this._env                = opts.env ?? this._detectEnv();

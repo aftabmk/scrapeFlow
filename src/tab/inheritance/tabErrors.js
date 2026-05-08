@@ -1,9 +1,11 @@
 'use strict';
 
+const { ERROR } = require('./constants');
+
 class NavigationError extends Error {
   constructor(message, cause) {
     super(message);
-    this.name  = 'NavigationError';
+    this.name  = ERROR.NAVIGATION;
     this.cause = cause;
   }
 }
@@ -11,7 +13,7 @@ class NavigationError extends Error {
 class NetworkError extends Error {
   constructor(message, cause) {
     super(message);
-    this.name  = 'NetworkError';
+    this.name  = ERROR.NETWORK;
     this.cause = cause;
   }
 }
@@ -19,7 +21,7 @@ class NetworkError extends Error {
 class TimeoutError extends Error {
   constructor(message) {
     super(message);
-    this.name = 'TimeoutError';
+    this.name = ERROR.TIMEOUT;
   }
 }
 

@@ -1,9 +1,6 @@
 'use strict';
 
-const BLOCKED_RESOURCE_TYPES = new Set([
-  'stylesheet', 'image', 'font', 'script',
-  'xhr', 'websocket', 'media', 'other',
-]);
+const { BLOCKED_RESOURCE_TYPES } = require('./constants');
 
 class TabInterceptor {
   async interceptor() {

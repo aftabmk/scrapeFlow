@@ -5,7 +5,7 @@ const { TabEvaluator } = require('./tabEvaluator');
 class TabLifecycle extends TabEvaluator {
   async recreate(browser) {
     await this._closePage();
-    this._page     = await browser.newPage();
+    this._page = await browser.newPage();
     await this.interceptor();
     this.isActive  = false;
     this.lastError = null;
@@ -20,7 +20,10 @@ class TabLifecycle extends TabEvaluator {
   async _closePage() {
     try {
       if (!this._page.isClosed()) await this._page.close();
-    } catch { /* already gone */ }
+    } 
+    catch { 
+      console.log("no live tab left to be closed");
+    }
   }
 }
 
