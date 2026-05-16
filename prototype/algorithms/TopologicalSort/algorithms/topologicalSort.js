@@ -1,12 +1,6 @@
 const { Graph } = require ('../models/graph.js');
 
 class TopologicalSort {
-  /**
-   * Kahn's algorithm (BFS, iterative).
-   * Returns sorted order, or throws if a cycle is detected.
-   * @param {Graph} graph
-   * @returns {string[]}
-   */
   static kahn(graph) {
     const inDegree = new Map(graph.inDegree);  // local copy
     const queue    = [];
@@ -34,11 +28,6 @@ class TopologicalSort {
     return result;
   }
 
-  /**
-   * DFS-based topological sort (recursive, postorder reversal).
-   * @param {Graph} graph
-   * @returns {string[]}
-   */
   static dfs(graph) {
     const visited  = new Set();
     const onStack  = new Set();  // cycle detection
