@@ -10,6 +10,7 @@
     "dev": "node index"
   },
   "dependencies": {
+    "ajv": "^8.20.0",
     "dotenv": "^17.3.1",
     "puppeteer": "^24.40.0",
     "puppeteer-extra": "^3.3.6",
