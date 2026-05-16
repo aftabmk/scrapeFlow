@@ -1,6 +1,6 @@
-const JobEvent      = require('../events/jobEvent');
-const WorkflowEvent = require('../events/workflowEvent');
-const TracerEvent   = require('../events/tracerEvent');
+const JobEvent      = require('../../events/jobEvent');
+const WorkflowEvent = require('../../events/workflowEvent');
+const TracerEvent   = require('../../events/tracerEvent');
 
 class WorkflowClass {
   constructor() {

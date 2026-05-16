@@ -19,7 +19,8 @@ class TabEvaluator extends TabInterceptor {
       });
 
       this.isActive = true;
-    } catch (err) {
+    } 
+    catch (err) {
       this.isActive = false;
 
       const wrapped = new NavigationError(err.message, err);

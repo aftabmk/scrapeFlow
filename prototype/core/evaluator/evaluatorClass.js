@@ -1,6 +1,6 @@
-const ScraperEvent   = require('../events/scraperEvent');
-const EvaluatorEvent = require('../events/evaluatorEvent');
-const TracerEvent    = require('../events/tracerEvent');
+const ScraperEvent   = require('../../events/scraperEvent');
+const EvaluatorEvent = require('../../events/evaluatorEvent');
+const TracerEvent    = require('../../events/tracerEvent');
 
 class EvaluatorClass {
   constructor() {

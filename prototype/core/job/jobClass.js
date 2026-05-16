@@ -1,5 +1,5 @@
-const JobEvent    = require('../events/jobEvent');
-const TracerEvent = require('../events/tracerEvent');
+const JobEvent    = require('../../events/jobEvent');
+const TracerEvent = require('../../events/tracerEvent');
 
 class JobClass {
   constructor() {}

@@ -1,4 +1,4 @@
-const TracerEvent = require('../events/tracerEvent');
+const TracerEvent = require('../../events/tracerEvent');
 
 class TracerClass {
   constructor() {
