@@ -1,3 +1,5 @@
+require('dotenv').config();
+
 const TracerClass    = require('./core/tracer/tracerClass');
 const JobClass       = require('./core/job/jobClass');
 const WorkflowClass  = require('./core/workflow/workflowClass');
