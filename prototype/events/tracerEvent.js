@@ -1,21 +1,34 @@
-const eventBus = require('../eventBus');
+// TracerEvent.js
 
-const TracerEvent = {
-  TRACE: 'tracer:trace',
-  WARN:  'tracer:warn',
+const eventBus   = require('../eventBus');
+const { Tracer } = require('../core/tracer/tracer');
 
-  trace(key, chain) {
-    eventBus.emit(TracerEvent.TRACE, { key, chain });
-  },
+class TracerEvent {
+  constructor() {
+    this.TRACE   = 'tracer:trace';
+    this._store  = new Map();  // jobId → Tracer[]
+  }
 
-  warn(key, chain, message) {
-    eventBus.emit(TracerEvent.WARN, { key, chain, message });
-  },
+  trace(payload) {
+    const tracer = new Tracer(payload);
+    const data   = tracer.getData();
 
-  subscribe(onTrace, onWarn) {
-    eventBus.on(TracerEvent.TRACE, onTrace);
-    eventBus.on(TracerEvent.WARN,  onWarn);
-  },
-};
+    // Store in hashmap grouped by jobId
+    if (!this._store.has(payload.jobId)) {
+      this._store.set(payload.jobId, []);
+    }
+    this._store.get(payload.jobId).push(data);
 
-module.exports = TracerEvent;
+    eventBus.emit(this.TRACE, data);
+  }
+
+  traceWithId(jobId) {
+    return this._store.get(jobId) ?? [];
+  }
+
+  subscribe(onTrace) {
+    eventBus.on(this.TRACE, onTrace);
+  }
+}
+
+module.exports = new TracerEvent();

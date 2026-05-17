@@ -1,32 +1,41 @@
-// JobWorker.js
-// Lifecycle: build → emit
-// Validation is handled inside Job constructor.
-
-const { JobBuilder } = require('./models/JobBuilder');
+// events
 const JobEvent       = require('../../events/jobEvent');
 const TracerEvent    = require('../../events/tracerEvent');
+
+const { JobBuilder } = require('./models/JobBuilder');
 
 class JobWorker {
   constructor() {
     this._builder = new JobBuilder();
   }
+  // private
 
+  #traceOnFail() {
+    TracerEvent.trace({ jobId: null, class: 'JobWorker', function: 'run', status: 'failure', message: 'No valid jobs found' });
+    console.warn('[JobWorker] No valid jobs found — nothing emitted.');
+  }
+  
+  #traceOnSuccess(job) {
+    TracerEvent.trace({ jobId: job.id, class: 'JobWorker', function: 'run', status: 'success' });
+  }
+
+  // public
   run() {
-    const jobs = this._builder.buildAll();  // already validated Job[]
+    const jobs = this._builder.buildAll();
 
     if (jobs.length === 0) {
-      console.warn('[JobWorker] No valid jobs found — nothing emitted.');
+      this.#traceOnFail();
       return;
     }
-
+    
     for (const job of jobs) {
-      const key = `job:${job.exchange}:${job.createdAt}`;
-      TracerEvent.trace(key, ['JobWorker', 'run', 'JobEvent']);
       JobEvent.emit(job);
+      this.#traceOnSuccess(job);
     }
-
+    
     console.log(`[JobWorker] Emitted ${jobs.length} job(s).`);
   }
+  
 }
 
 module.exports = { JobWorker };
