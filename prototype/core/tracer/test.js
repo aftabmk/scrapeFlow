@@ -2,9 +2,9 @@ const { TracerStore }  = require('./tracerStore');
 const TracerEvent = require('../../events/tracerEvent');
 
 // ─── Subscribe ───────────────────────────────────────────────────────────────
-TracerEvent.subscribe((data) => {
-  console.log('[TracerEvent]', data);
-});
+// TracerEvent.subscribe((data) => {
+//   console.log('[TracerEvent]', data);
+// });
 
 // ─── Trace ───────────────────────────────────────────────────────────────────
 TracerEvent.trace({ jobId: 1, class: 'Job', function: '_validate', status: 'success' });
