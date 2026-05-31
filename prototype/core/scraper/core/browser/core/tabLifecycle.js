@@ -1,5 +1,8 @@
 const Tab = require('../../tab/tab');
+
+const FetchError = require('./injector/fetchErrors');
 const FetchResponse = require('./injector/fetchResponse');
+
 const SessionManager = require('./injector/sessionManager');
 class TabLifecycle {
   constructor(browser, onClose) {
@@ -15,6 +18,7 @@ class TabLifecycle {
       window.sessionInjector = ${SessionManager.toString()};
       window.sessionManager = new window.sessionInjector();
       
+      window.fetchError  = ${FetchError.toString()};
       window.fetchResponse  = ${FetchResponse.toString()};
     `);
 

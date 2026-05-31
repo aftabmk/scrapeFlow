@@ -6,6 +6,11 @@ class BrowserLifecycle {
 
   async start() {
     this.browser = await this.environment.launch();
+
+    // close blank tab at start saves approx 2.6 mb
+    const [blankTab] = await this.browser.pages();
+    if (blankTab) await blankTab.close();
+
     console.log('[Browser] launched');
 
     return this.browser;

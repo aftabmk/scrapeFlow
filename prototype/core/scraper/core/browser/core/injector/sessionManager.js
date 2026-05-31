@@ -54,14 +54,8 @@ class SessionManager {
       return new window.fetchResponse(this.session,response,body);
     } 
     catch (error) {
-      return {
-        id       : this.session.id,
-        exchange : this.session.exchange,
-        contract : this.session.contract,
-        status: 0,
-        error: error.message,
-        body: null,
-      };
+      console.log(error);
+      return new window.fetchError(this.session,error?.status ?? 0,error.message);
     }
   }
 
