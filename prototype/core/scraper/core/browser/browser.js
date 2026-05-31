@@ -1,6 +1,6 @@
-const BrowserActor = require('../core/browserActor');
-const { LFUCache } = require('../../../algorithms/LFUCache/algorithms/LFUCahche');
-const Tab          = require('./tab');
+const BrowserActor = require('./core/browserActor');
+const { LFUCache } = require('../../../../algorithms/LFUCache/algorithms/LFUCahche');
+const Tab          = require('../tab/tab');
 
 const MAX_TABS = 5;
 

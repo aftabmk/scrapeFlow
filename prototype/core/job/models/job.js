@@ -30,7 +30,6 @@ class Job {
     this.exchange        = process.env[`EXCHANGE_${id}`];
     this.page_url        = process.env[`PAGE_URL_${id}`];
     this.api_url         = process.env[`API_URL_${id}`];
-    this.referer         = process.env[`REFERER_${id}`];
     this.contract        = process.env[`CONTRACT_${id}`];
   
     let apiUrlBuilder = process.env[`API_URL_BUILDER_${id}`];
@@ -42,7 +41,6 @@ class Job {
       exchange : this.exchange,
       page_url : this.page_url,
       api_url  : this.api_url,
-      referer  : this.referer,
       contract : this.contract
     };
 

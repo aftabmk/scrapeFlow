@@ -8,9 +8,8 @@ class JobSchema {
         page_url        : { type: 'string' },
         api_url         : { type: 'string' },
         api_url_builder : { type: 'string' },
-        referer         : { type: 'string' },
       },
-      required            : ['exchange', 'page_url', 'api_url', 'referer', 'contract'],
+      required            : ['exchange', 'page_url', 'api_url', 'contract'],
       additionalProperties: false,
     };
   }

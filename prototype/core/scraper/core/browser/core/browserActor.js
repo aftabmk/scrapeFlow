@@ -1,4 +1,4 @@
-const JobEvent = require('../../../events/jobEvent');
+const JobEvent = require('../../../../../events/jobEvent');
 
 class BrowserActor {
   constructor() {

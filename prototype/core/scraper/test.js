@@ -1,7 +1,7 @@
 // test.js
 require('dotenv').config({ path: require('path').resolve(__dirname, '../../.env') });
 
-const Browser  = require('./actors/browser');
+const Browser  = require('./core/browser/browser');
 const JobEvent = require('../../events/jobEvent');
 const { JobWorker } = require('../job/jobWorker')
 
