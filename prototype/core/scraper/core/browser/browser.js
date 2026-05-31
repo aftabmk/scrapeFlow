@@ -1,114 +1,131 @@
-const BrowserActor = require('./core/browserActor');
-const { LFUCache } = require('../../../../algorithms/LFUCache/algorithms/LFUCahche');
-const Tab          = require('../tab/tab');
+const BrowserLifecycle = require('./core/browserLifecycle');
+const TabLifecycle = require('./core/tabLifecycle');
+const QueueManager = require('./core/queueManager');
+const HealthMonitor = require('./core/healthMonitor');
+const JobSubscriber = require('./core/jobSubscriber');
+
+const LambdaEnvironment =
+  require('./core/environment/lambdaEnvironment');
+
+const LocalEnvironment =
+  require('./core/environment/localEnvironment');
 
 const MAX_TABS = 5;
 
 let _instance = null;
 
-class Browser extends BrowserActor {
+class Browser {
   constructor() {
-    super();
     if (_instance) return _instance;
 
-    this.browser = null;
-    this.cache   = new LFUCache(MAX_TABS);
-    this.queue   = [];
+    this.lifecycle = null;
+    this.tabs = null;
+
+    this.queueManager = new QueueManager(MAX_TABS);
+
+    this.healthMonitor = new HealthMonitor(
+      () => this.healthCheck()
+    );
+
+    this.jobSubscriber = new JobSubscriber(
+      (job) => this.onJob(job)
+    );
 
     _instance = this;
   }
 
   static getInstance() {
-    if (!_instance) new Browser();
+    if (!_instance) {
+      new Browser();
+    }
+
     return _instance;
   }
 
   async init() {
-    const isLambda = !!process.env.AWS_LAMBDA_FUNCTION_NAME;
+    const environment =
+      process.env.AWS_LAMBDA_FUNCTION_NAME
+        ? new LambdaEnvironment()
+        : new LocalEnvironment();
 
-    if (isLambda) {
-      const chromium       = require('@sparticuz/chromium');
-      const puppeteerExtra = require('puppeteer-extra');
-      const StealthPlugin  = require('puppeteer-extra-plugin-stealth');
+    this.lifecycle =
+      new BrowserLifecycle(environment);
 
-      puppeteerExtra.use(StealthPlugin());
+    const browser =
+      await this.lifecycle.start();
 
-      this.browser = await puppeteerExtra.launch({
-        args:            chromium.args,
-        defaultViewport: chromium.defaultViewport,
-        executablePath:  await chromium.executablePath(),
-        headless:        chromium.headless,
-      });
-    } else {
-      const puppeteerExtra = require('puppeteer-extra');
-      const StealthPlugin  = require('puppeteer-extra-plugin-stealth');
+    this.tabs =
+      new TabLifecycle(
+        browser,
+        this._onTabClosed.bind(this)
+      );
 
-      puppeteerExtra.use(StealthPlugin());
+    this.jobSubscriber.subscribe();
 
-      this.browser = await puppeteerExtra.launch({
-        headless: false,
-        devtools: true,
-        args:     ['--no-sandbox', '--disable-setuid-sandbox'],
-      });
-    }
+    this.healthMonitor.start();
 
-    console.log('[Browser] launched');
-    this.subscribeToJobs();
-    this._startHealthCheck();
+    return this;
   }
 
   async onJob(job) {
-    const existing = this.cache.get(job.id);
+    const existing =
+      this.queueManager.get(job.id);
+
     if (existing !== -1) {
       await existing.processJob(job);
       return;
     }
 
-    if (this.cache.size < MAX_TABS) {
-      await this._spawnTab(job);
-    } else {
-      console.log(`[Browser] all ${MAX_TABS} slots full — queuing job ${job.id}`);
-      this.queue.push(job);
+    if (!this.queueManager.hasCapacity()) {
+      console.log(
+        `[Browser] all ${MAX_TABS} slots full — queuing job ${job.id}`
+      );
+
+      this.queueManager.enqueue(job);
+      return;
     }
+
+    await this._spawnTab(job);
   }
 
   async _spawnTab(job) {
-    const page = await this.browser.newPage();
-    const tab  = new Tab(page, () => this._onTabClosed(job.id));
+    const tab =
+      await this.tabs.create(job);
 
-    this.cache.set(job.id, tab);
-    await tab.init();
+    this.queueManager.add(
+      job.id,
+      tab
+    );
+
     await tab.processJob(job);
   }
 
   async _onTabClosed(jobId) {
-    console.log(`[Browser] tab closed for job ${jobId}`);
-    if (this.queue.length > 0) {
-      const next = this.queue.shift();
+    this.queueManager.remove(jobId);
+
+    console.log(
+      `[Browser] tab closed for job ${jobId}`
+    );
+
+    if (this.queueManager.hasQueuedJobs) {
+      const next =
+        this.queueManager.dequeue();
+
       await this._spawnTab(next);
     }
   }
 
   async healthCheck() {
-    const pages   = await this.browser.pages();
-    const results = await Promise.all(
-      pages.map(async (page) => {
-        try {
-          return { url: page.url(), live: !page.isClosed() };
-        } catch {
-          return { url: null, live: false };
-        }
-      })
-    );
-    const allLive = results.every((r) => r.live);
-    console.log('[Browser] health:', results);
-    return allLive;
+    return this.lifecycle.healthCheck();
   }
 
   async close() {
-    this._stopHealthCheck();
-    if (this.browser) await this.browser.close();
+    this.healthMonitor.stop();
+
+    await this.lifecycle.stop();
+
     _instance = null;
+
     console.log('[Browser] closed');
   }
 }

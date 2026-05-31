@@ -6,11 +6,13 @@ class Tab {
   constructor(page, onClose) {
     this.page = page;
     this.onClose = onClose;
-    
+
     this.fetcher = new Evaluator(page);
     this.interceptor = new Interceptor(page);
-    this.health = new Health(page,this.close.bind(this));
-
+    this.health = new Health(
+      page,
+      this.close.bind(this)
+    );
   }
 
   async init() {
@@ -19,13 +21,15 @@ class Tab {
   }
 
   async processJob(job) {
-    await this.fetcher.visit(job.page_url);
-    return this.fetcher.fetch(job.api_url);
+    await this.fetcher.visit(job);
+
+    return this.fetcher.fetch();
   }
 
   async close() {
     this.health.stop();
-    this.fetcher.reset();
+
+    await this.fetcher.reset();
 
     try {
       if (!this.page.isClosed()) {
