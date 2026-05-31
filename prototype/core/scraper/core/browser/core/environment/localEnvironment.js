@@ -1,6 +1,4 @@
-const BrowserEnvironment = require('./browserEnvironment');
-
-class LocalEnvironment extends BrowserEnvironment {
+class LocalEnvironment {
   async launch() {
     const puppeteerExtra = require('puppeteer-extra');
     const StealthPlugin = require('puppeteer-extra-plugin-stealth');

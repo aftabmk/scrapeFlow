@@ -1,6 +1,4 @@
-const BrowserEnvironment = require('./browserEnvironment');
-
-class LambdaEnvironment extends BrowserEnvironment {
+class LambdaEnvironment {
   async launch() {
     const chromium = require('@sparticuz/chromium');
     const puppeteerExtra = require('puppeteer-extra');

@@ -1,14 +1,9 @@
-const BrowserLifecycle = require('./core/browserLifecycle');
 const TabLifecycle = require('./core/tabLifecycle');
 const QueueManager = require('./core/queueManager');
 const HealthMonitor = require('./core/healthMonitor');
 const JobSubscriber = require('./core/jobSubscriber');
-
-const LambdaEnvironment =
-  require('./core/environment/lambdaEnvironment');
-
-const LocalEnvironment =
-  require('./core/environment/localEnvironment');
+const BrowserLifecycle = require('./core/browserLifecycle');
+const BrowserEnvironment = require('./core/environment/browserEnvironment');
 
 const MAX_TABS = 5;
 
@@ -43,16 +38,11 @@ class Browser {
   }
 
   async init() {
-    const environment =
-      process.env.AWS_LAMBDA_FUNCTION_NAME
-        ? new LambdaEnvironment()
-        : new LocalEnvironment();
+    const environment = new BrowserEnvironment();
 
-    this.lifecycle =
-      new BrowserLifecycle(environment);
+    this.lifecycle = new BrowserLifecycle(environment);
 
-    const browser =
-      await this.lifecycle.start();
+    const browser = await this.lifecycle.start();
 
     this.tabs =
       new TabLifecycle(
