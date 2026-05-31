@@ -5,6 +5,7 @@ class SessionManager {
 
   initialize(event) {
     this.session = {
+      id      : event.id,
       exchange: event.exchange,
       contract: event.contract,
 
@@ -49,14 +50,14 @@ class SessionManager {
         },
       });
 
+      const body = await response.json();
+      return new window.fetchResponse(this.session,response,body);
+    } 
+    catch (error) {
       return {
-        ok: response.ok,
-        status: response.status,
-        body : response.json(),
-      };
-    } catch (error) {
-      return {
-        ok: false,
+        id       : this.session.id,
+        exchange : this.session.exchange,
+        contract : this.session.contract,
         status: 0,
         error: error.message,
         body: null,

@@ -62,7 +62,7 @@ class Browser {
       this.queueManager.get(job.id);
 
     if (existing !== -1) {
-      await existing.processJob(job);
+      const data = await existing.processJob(job);
       return;
     }
 
@@ -87,7 +87,9 @@ class Browser {
       tab
     );
 
-    await tab.processJob(job);
+    const data = await tab.processJob(job);
+    console.log({ data });
+    // await tab.processJob(job);
   }
 
   async _onTabClosed(jobId) {
