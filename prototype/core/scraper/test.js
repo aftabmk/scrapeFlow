@@ -2,8 +2,12 @@
 require('dotenv').config({ path: require('path').resolve(__dirname, '../../.env') });
 
 const Browser  = require('./core/browser/browser');
-const JobEvent = require('../../events/jobEvent');
+
 const { JobWorker } = require('../job/jobWorker')
+
+const JobEvent = require('../../events/jobEvent');
+const ScraperEvent = require('../../events/scraperEvent');
+
 
 async function main() {
   // --- boot ---
@@ -13,6 +17,11 @@ async function main() {
   // --- health before jobs ---
   console.log('\n[test] initial health check');
   await browser.healthCheck();
+
+  // subscrbe to browser scraping events
+  ScraperEvent.subscribe((job) => {
+    console.log('[JobEvent] received:', job);
+  });
 
   // ─── Job listener ────────────────────────────────────────────────────────────
   JobEvent.subscribe((job) => {
