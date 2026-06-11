@@ -20,7 +20,7 @@ async function main() {
 
   // subscrbe to browser scraping events
   ScraperEvent.subscribe((job) => {
-    console.log('[JobEvent] received:', job);
+    console.log('[ScraperEvent] received:', job);
   });
 
   // ─── Job listener ────────────────────────────────────────────────────────────
