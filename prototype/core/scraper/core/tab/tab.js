@@ -7,7 +7,7 @@ class Tab {
     this.page = page;
     this.onClose = onClose;
 
-    this.fetcher = new Evaluator(page);
+    this.evaluator = new Evaluator(page);
     this.interceptor = new Interceptor(page);
     this.health = new Health(
       page,
@@ -21,15 +21,15 @@ class Tab {
   }
 
   async processJob(job) {
-    await this.fetcher.visit(job);
+    await this.evaluator.visit(job);
 
-    return this.fetcher.fetch();
+    return this.evaluator.fetch();
   }
 
   async close() {
     this.health.stop();
 
-    await this.fetcher.reset();
+    await this.evaluator.reset();
 
     try {
       if (!this.page.isClosed()) {
