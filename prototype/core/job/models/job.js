@@ -1,7 +1,9 @@
 // Job.js
 
 const { JobSchema } = require('./JobSchema');
+const TradeIdBuilder = require('./tradeBuilder');
 const { Validator } = require('../../../algorithms/jsonValidator/algorithms/Validator');
+
 const TracerEvent   = require('../../../events/TracerEvent');
 
 const schema    = new JobSchema();
@@ -19,25 +21,30 @@ class Job {
   }
 
   // public
-  constructor(id) {
-    this.build(id);
+  constructor(job) {
+    this.build(job);
     this.validate();
   }
 
-  build(id) {
-    this.id              = id;
-    this.createdAt       = Date.now();
-    this.exchange        = process.env[`EXCHANGE_${id}`];
-    this.page_url        = process.env[`PAGE_URL_${id}`];
-    this.api_url         = process.env[`API_URL_${id}`];
-    this.contract        = process.env[`CONTRACT_${id}`];
+  build(job) {
+    // this.id              = buildId({exchange : job.EXCHANGE, contract : job.CONTRACT, createdAt : Date.now()});
+    // this.createdAt       = Date.now();
+    // this.exchange        = job.EXCHANGE;
+    // this.contract        = job.CONTRACT;
+    // | elapsedMinutes | status | contract | exchange |
+    //                    2 bits    2 bits     2 bits
+    
+    this.id              = TradeIdBuilder.build(job);
+    this.page_url        = job.PAGE_URL;
+    this.api_url         = job.API_URL;
   
-    let apiUrlBuilder = process.env[`API_URL_BUILDER_${id}`];
+    let apiUrlBuilder = job.API_URL_BUILDER;
     if(apiUrlBuilder)
       this.api_url_builder = apiUrlBuilder;
   }
   validate() {
     const data = {
+      id       : this.id,
       exchange : this.exchange,
       page_url : this.page_url,
       api_url  : this.api_url,

@@ -5,8 +5,8 @@ const TracerEvent    = require('../../events/tracerEvent');
 const { JobBuilder } = require('./models/JobBuilder');
 
 class JobWorker {
-  constructor() {
-    this._builder = new JobBuilder();
+  constructor(events) {
+    this._builder = new JobBuilder(events);
   }
   // private
 

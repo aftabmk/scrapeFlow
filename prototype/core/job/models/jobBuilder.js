@@ -3,22 +3,19 @@
 const { Job } = require('./Job');
 
 class JobBuilder {
-  _discoverIds() {
-    return Object.keys(process.env)
-      .filter(k => /^EXCHANGE_\d+$/.test(k))
-      .map(k => parseInt(k.replace('EXCHANGE_', ''), 10))
-      .sort((a, b) => a - b);
+  constructor(events) {
+    this.events = events;
   }
 
   buildAll() {
-    const ids  = this._discoverIds();
     const jobs = [];
 
-    for (const id of ids) {
+    for (const event of this.events) {
       try {
-        jobs.push(new Job(id));
-      } catch (err) {
-        console.warn(`[JobBuilder] Skipping id=${id}: ${err.message}`);
+        jobs.push(new Job(event));
+      } 
+      catch (err) {
+        console.warn(`[JobBuilder] Skipping exchange=${event.EXCHANGE} & contract=${event.CONTRACT}: ${err.message}`);
       }
     }
 
