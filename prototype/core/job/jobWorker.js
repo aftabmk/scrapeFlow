@@ -31,6 +31,7 @@ class JobWorker {
     for (const job of jobs) {
       JobEvent.emit(job);
       this.#traceOnSuccess(job);
+      console.log({"[jobWorker] decode job ":job.decode()});
     }
     
     console.log(`[JobWorker] Emitted ${jobs.length} job(s).`);

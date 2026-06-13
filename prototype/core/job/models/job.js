@@ -26,14 +26,7 @@ class Job {
     this.validate();
   }
 
-  build(job) {
-    // this.id              = buildId({exchange : job.EXCHANGE, contract : job.CONTRACT, createdAt : Date.now()});
-    // this.createdAt       = Date.now();
-    // this.exchange        = job.EXCHANGE;
-    // this.contract        = job.CONTRACT;
-    // | elapsedMinutes | status | contract | exchange |
-    //                    2 bits    2 bits     2 bits
-    
+  build(job) {   
     this.id              = TradeIdBuilder.build(job);
     this.page_url        = job.PAGE_URL;
     this.api_url         = job.API_URL;
@@ -42,13 +35,14 @@ class Job {
     if(apiUrlBuilder)
       this.api_url_builder = apiUrlBuilder;
   }
+  
   validate() {
     const data = {
       id       : this.id,
       exchange : this.exchange,
       page_url : this.page_url,
       api_url  : this.api_url,
-      contract : this.contract
+      contract : this.contract,
     };
 
     if (this.api_url_builder) data.api_url_builder = this.api_url_builder;
@@ -61,6 +55,27 @@ class Job {
     this.#traceOnSunccess(this.id);
   }
 
+  decode() {
+      return TradeIdBuilder.decode(this.id);
+  }
+
+  getStatus() {
+      return TradeIdBuilder.getStatus(this.id);
+  }
+
+  updateStatus(status) {
+      this.id = TradeIdBuilder.updateStatus(this.id, status);
+      return this;
+  }
 }
 
 module.exports = { Job };
+
+
+
+// this.id              = buildId({exchange : job.EXCHANGE, contract : job.CONTRACT, createdAt : Date.now()});
+// this.createdAt       = Date.now();
+// this.exchange        = job.EXCHANGE;
+// this.contract        = job.CONTRACT;
+// | elapsedMinutes | status | contract | exchange |
+//                    2 bits    2 bits     2 bits
