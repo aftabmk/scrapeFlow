@@ -1,8 +1,8 @@
 // test.js
 require('dotenv').config({ path: require('path').resolve(__dirname, '../../.env') });
 
+const events = require('../../event.json');
 const Browser  = require('./core/browser/browser');
-
 const { JobWorker } = require('../job/jobWorker')
 
 const JobEvent = require('../../events/jobEvent');
@@ -29,7 +29,7 @@ async function main() {
   });
 
   // ─── Run ─────────────────────────────────────────────────────────────────────
-  const worker = new JobWorker();
+  const worker = new JobWorker(events);
   worker.run();
 
   // --- health after jobs ---

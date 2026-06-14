@@ -60,18 +60,11 @@ class TradeIdBuilder {
 
         let id = 0;
 
-        // bits 0-1 => exchange
         id |= this.EXCHANGE[EXCHANGE];
-
-        // bits 2-3 => contract
         id |= this.CONTRACT[CONTRACT] << 2;
-
-        // bits 4-5 => status
         id |= this.STATUS[STATUS] << 4;
-
-        // bits 6+ => minutes since 9 : 15 AM IST (MARKET OPEN)
         id |= elapsedMinutes << 6;
-
+        
         return id;
     }
 

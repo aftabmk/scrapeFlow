@@ -8,18 +8,39 @@ class JobBuilder {
   }
 
   buildAll() {
+    // Strict validation for events
+    if (!this.events) {
+      throw new Error('JobBuilder: events parameter is required');
+    }
+
     const jobs = [];
 
     for (const event of this.events) {
       try {
-        jobs.push(new Job(event));
-      } 
-      catch (err) {
-        console.warn(`[JobBuilder] Skipping exchange=${event.EXCHANGE} & contract=${event.CONTRACT}: ${err.message}`);
+        if (!event) {
+          console.warn('[JobBuilder] Skipping null/undefined event');
+          continue;
+        }
+
+        const job = new Job(event);
+        jobs.push(job);
+
+      } catch (err) {
+        const exchange = event?.EXCHANGE || 'unknown';
+        const contract = event?.CONTRACT || 'unknown';
+
+        console.warn(
+          `[JobBuilder] Skipping exchange=${exchange} & contract=${contract}: ${err.message}`
+        );
       }
     }
 
-    return jobs;  // Job[]
+    // Optional: Safety check
+    if (jobs.length === 0) {
+      console.warn('[JobBuilder] Warning: No jobs were built from the available events.');
+    }
+
+    return jobs; // Job[]
   }
 }
 
