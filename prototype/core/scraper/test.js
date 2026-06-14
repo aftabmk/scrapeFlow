@@ -8,37 +8,65 @@ const { JobWorker } = require('../job/jobWorker')
 const JobEvent = require('../../events/jobEvent');
 const ScraperEvent = require('../../events/scraperEvent');
 
-
 async function main() {
-  // --- boot ---
-  const browser = Browser.getInstance();
-  await browser.init();
+  try {
+    // --- boot ---
+    const browser = Browser.getInstance();
+    await browser.init();
 
-  // --- health before jobs ---
-  console.log('\n[test] initial health check');
-  await browser.healthCheck();
+    // --- health before jobs ---
+    console.log('\n[test] initial health check');
+    await browser.healthCheck();
 
-  // // subscrbe to browser scraping events
-  ScraperEvent.subscribe((job) => {
-    console.log('[ScraperEvent] received:', job.id);
-  });
+    // Subscribe to events
+    ScraperEvent.subscribe((job) => {
+      console.log('[ScraperEvent] received:', job.id);
+    });
 
-  // ─── Job listener ────────────────────────────────────────────────────────────
-  JobEvent.subscribe((job) => {
-    console.log('[JobEvent] received:', job);
-  });
+    JobEvent.subscribe((job) => {
+      console.log('[JobEvent] received:', job);
+    });
 
-  // ─── Run ─────────────────────────────────────────────────────────────────────
-  const worker = new JobWorker(events);
-  worker.run();
+    const worker = new JobWorker(events);
 
-  // --- health after jobs ---
-  console.log('\n[test] health check after jobs');
-  await browser.healthCheck();
+    // ─── Run worker every 30 seconds, 5 times ─────────────────────────────────
+    console.log('\n🚀 Starting JobWorker - will run 5 times every 30s');
 
-  // --- teardown ---
-  // console.log('\n[test] closing browser');
-  // await browser.close();
+    let runCount = 0;
+    const MAX_RUNS = 2, INTERVAL_MS = 30 * 1000; // 30 seconds
+
+    const intervalId = setInterval(async () => {
+      runCount++;
+      console.log(`\n[Run ${runCount}/${MAX_RUNS}] Starting worker.run()`);
+
+      try {
+        await worker.run();           // Make sure run() is async if needed
+        console.log(`[Run ${runCount}/${MAX_RUNS}] worker.run() completed`);
+      } 
+      catch (err) {
+        console.error(`[Run ${runCount}/${MAX_RUNS}] Error:`, err.message);
+      }
+
+      // Stop after 5 runs
+      if (runCount >= MAX_RUNS) {
+        clearInterval(intervalId);
+        console.log('\n✅ Completed 5 runs of worker.run()');
+        
+        // Final health check
+        console.log('\n[test] final health check');
+        await browser.healthCheck();
+      }
+    }, INTERVAL_MS);
+
+    // Also run immediately (first run)
+    console.log('\n[Run 1/5] Initial worker.run()');
+    await worker.run();
+
+  } 
+  catch(e) {
+    console.error({ error: e.message });
+  }
 }
 
-main().catch(console.error);
+main();
+

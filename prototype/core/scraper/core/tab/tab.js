@@ -24,6 +24,10 @@ class Tab {
     return this.evaluator.fetch();
   }
 
+  async processCachedJob(job) {
+    return this.evaluator.fetch();
+  }
+
 }
 
 module.exports = Tab;

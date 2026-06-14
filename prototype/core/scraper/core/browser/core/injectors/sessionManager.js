@@ -23,30 +23,14 @@ class SessionManager {
     return this.session;
   }
 
-  getCookies() {
-    return this.session?.cookieString;
-  }
-
-  getUserAgent() {
-    return this.session?.userAgent;
-  }
-
-  getReferer() {
-    return this.session?.referer;
-  }
-
-  getOrigin() {
-    return this.session?.origin;
-  }
-
   async fetch(url = this.session.apiUrl) {
     try {
       const response = await fetch(url, {
         headers: {
-          Origin: this.getOrigin(),
-          Cookie: this.getCookies(),
-          Referer: this.getReferer(),
-          'User-Agent': this.getUserAgent(),
+          Origin: this.session?.origin,
+          Cookie: this.session?.cookieString,
+          Referer: this.session?.referer,
+          'User-Agent': this.session?.userAgent,
         },
       });
 

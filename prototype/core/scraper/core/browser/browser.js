@@ -35,10 +35,7 @@ class Browser {
 
     const browser = await this.lifecycle.start();
 
-    this.tabs = new TabLifecycle(
-      browser,
-      this._onTabClosed.bind(this)
-    );
+    this.tabs = new TabLifecycle(browser);
 
     this.jobSubscriber.subscribe();
     this.healthMonitor.start();
@@ -46,11 +43,16 @@ class Browser {
     return this;
   }
 
-  async onJob(job) {
-    const existing = this.queueManager.get(job.id);
+  generateKey(job) {
+    const { contract, exchange } = job.decode();
+    return exchange + '-' + contract;
+  }
 
+  async onJob(job) {
+    const key = this.generateKey(job);
+    const existing = this.queueManager.get(key);
     if (existing !== -1) {
-      await this._processJob(job, existing);
+      await this._processCachedJob(job, existing);
       return;
     }
 
@@ -64,8 +66,9 @@ class Browser {
   }
 
   async _spawnTab(job) {
+    const key = this.generateKey(job);
     const tab = await this.tabs.create(job);
-    this.queueManager.add(job.id, tab);
+    this.queueManager.add(key, tab);
     await this._processJob(job, tab);
   }
 
@@ -74,10 +77,18 @@ class Browser {
 
     ScraperEvent.emit(data);
   }
+  
+  async _processCachedJob(job, tab) {
+    const data = await tab.processCachedJob(job);
+    
+    ScraperEvent.emit(data);
+  }
+  
+  async _onTabClosed(job) {
+    const key = this.generateKey(job);
+    this.queueManager.remove(key);
 
-  async _onTabClosed(jobId) {
-    this.queueManager.remove(jobId);
-    console.log(`[Browser] tab closed for job ${jobId}`);
+    console.log(`[Browser] tab closed for job ${key}`);
 
     if (this.queueManager.hasQueuedJobs()) {
       const next = this.queueManager.dequeue();
