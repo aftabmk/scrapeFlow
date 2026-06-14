@@ -19,9 +19,9 @@ async function main() {
   await browser.healthCheck();
 
   // // subscrbe to browser scraping events
-  // ScraperEvent.subscribe((job) => {
-  //   console.log('[ScraperEvent] received:', job);
-  // });
+  ScraperEvent.subscribe((job) => {
+    console.log('[ScraperEvent] received:', job.id);
+  });
 
   // ─── Job listener ────────────────────────────────────────────────────────────
   JobEvent.subscribe((job) => {

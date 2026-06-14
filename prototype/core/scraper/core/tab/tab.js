@@ -1,44 +1,29 @@
-const Health = require('./core/health');
 const Evaluator = require('./core/evaluator');
 const Interceptor = require('./core/interceptor');
 
 class Tab {
-  constructor(page, onClose) {
+  constructor(page) {
     this.page = page;
-    this.onClose = onClose;
+    this.page._loading = false;
+    this.page._processing = false;
 
     this.evaluator = new Evaluator(page);
     this.interceptor = new Interceptor(page);
-    this.health = new Health(
-      page,
-      this.close.bind(this)
-    );
   }
 
   async init() {
+    this.page._loading = true;
     await this.interceptor.enable();
-    this.health.start();
+    this.page._loading = false;
   }
-
+  
   async processJob(job) {
+    this.page._processing = true;
     await this.evaluator.visit(job);
-
+    this.page._processing = false;
     return this.evaluator.fetch();
   }
 
-  async close() {
-    this.health.stop();
-
-    await this.evaluator.reset();
-
-    try {
-      if (!this.page.isClosed()) {
-        await this.page.close();
-      }
-    } catch {}
-
-    this.onClose?.();
-  }
 }
 
 module.exports = Tab;

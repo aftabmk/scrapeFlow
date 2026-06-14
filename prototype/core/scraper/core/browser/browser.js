@@ -18,15 +18,8 @@ class Browser {
     this.lifecycle    = null;
     this.tabs         = null;
     this.queueManager = new QueueManager(MAX_TABS);
-
-    this.healthMonitor = new HealthMonitor(
-      () => this.healthCheck()
-    );
-
-    this.jobSubscriber = new JobSubscriber(
-      (job) => this.onJob(job)
-    );
-
+    this.jobSubscriber = new JobSubscriber((job) => this.onJob(job));
+    this.healthMonitor = new HealthMonitor(() => this.healthCheck());
     _instance = this;
   }
 
@@ -49,7 +42,7 @@ class Browser {
 
     this.jobSubscriber.subscribe();
     this.healthMonitor.start();
-
+    
     return this;
   }
 
@@ -102,6 +95,8 @@ class Browser {
     _instance = null;
     console.log('[Browser] closed');
   }
+
+
 }
 
 module.exports = Browser;

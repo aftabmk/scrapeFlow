@@ -5,9 +5,8 @@ const FetchResponse = require('./injectors/fetchResponse');
 
 const SessionManager = require('./injectors/sessionManager');
 class TabLifecycle {
-  constructor(browser, onClose) {
+  constructor(browser) {
     this.browser = browser;
-    this.onClose = onClose;
   }
   
   async create(job) {
@@ -23,10 +22,7 @@ class TabLifecycle {
       window.fetchResponse  = ${FetchResponse.toString()};
     `);
 
-    const tab = new Tab(
-      page,
-      () => this.onClose(job.id)
-    );
+    const tab = new Tab(page);
 
     await tab.init();
 

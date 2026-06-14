@@ -4,7 +4,7 @@ class HealthMonitor {
     this.timer = null;
   }
 
-  start(intervalMs = 30000) {
+  start(intervalMs = 10_000) {
     this.timer = setInterval(
       () => this.healthCheckFn(),
       intervalMs
