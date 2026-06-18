@@ -25,7 +25,7 @@ class SessionManager {
 
   async fetch(url = this.session.apiUrl) {
     try {
-      const response = await fetch(url, {
+      const response = await window.HTMLRequest.fetch(url, {
         headers: {
           Origin: this.session?.origin,
           Cookie: this.session?.cookieString,
@@ -35,11 +35,11 @@ class SessionManager {
       });
 
       const body = await response.json();
-      return new window.fetchResponse(this.session,response,body);
-    } 
+      return new window.fetchResponse(this.session, response, body);
+    }
     catch (error) {
       console.log(error);
-      return new window.fetchError(this.session,error?.status ?? 0,error.message);
+      return new window.fetchError(this.session, error?.status ?? 0, error.message);
     }
   }
 

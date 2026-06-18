@@ -3,6 +3,7 @@ const Tab = require('../../tab/tab');
 const FetchError = require('./injectors/fetchErrors');
 const FetchResponse = require('./injectors/fetchResponse');
 
+const HTMLRequest = require('./injectors/htmlRequest');
 const SessionManager = require('./injectors/sessionManager');
 class TabLifecycle {
   constructor(browser) {
@@ -20,6 +21,10 @@ class TabLifecycle {
       // response and error injection
       window.fetchError  = ${FetchError.toString()};
       window.fetchResponse  = ${FetchResponse.toString()};
+
+      // html request injection
+      window.HTMLRequestInjector = ${HTMLRequest.toString()};
+      window.HTMLRequest = new window.HTMLRequestInjector();
     `);
 
     const tab = new Tab(page);

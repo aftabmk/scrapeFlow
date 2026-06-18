@@ -50,7 +50,7 @@ async function main() {
       // Stop after 5 runs
       if (runCount >= MAX_RUNS) {
         clearInterval(intervalId);
-        console.log('\n✅ Completed 5 runs of worker.run()');
+        console.log(`\n✅ Completed ${MAX_RUNS} runs of worker.run()`);
         
         // Final health check
         console.log('\n[test] final health check');

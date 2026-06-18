@@ -106,8 +106,6 @@ class Browser {
     _instance = null;
     console.log('[Browser] closed');
   }
-
-
 }
 
 module.exports = Browser;
