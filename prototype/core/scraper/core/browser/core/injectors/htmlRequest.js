@@ -1,5 +1,5 @@
 class HTMLRequest {
-  constructor(defaultTimeout = 30000) {
+  constructor(defaultTimeout = 30_000) {
     this.defaultTimeout = defaultTimeout;
   }
 

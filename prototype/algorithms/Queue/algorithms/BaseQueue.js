@@ -52,7 +52,7 @@ class BaseQueue {
 			this.inFlight.delete(id);
 		}
 		this.store.delete(id);
-		// this._compactWal();
+		this._compactWal();
 	}
 
 	timeout(id) {
