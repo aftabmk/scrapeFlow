@@ -34,8 +34,7 @@ class BoundedBlockingQueue {
 
             // If a producer is waiting, let one in
             if (this.waitingProducers.length > 0) {
-                const { item: producerItem, resolve } =
-                    this.waitingProducers.shift();
+                const { item: producerItem, resolve } = this.waitingProducers.shift();
 
                 this.queue.push(producerItem);
                 resolve();
