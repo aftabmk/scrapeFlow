@@ -1,89 +1,87 @@
-async function injectWebSocketScraper(page, wsPort = 8080, pageId = 'default') {
+const { SocketBuilder, HTMLRequest } = require('./class');
+// Convert functions to injectable strings
+
+async function injectClass(page) {
+  const HTMLRequestStr = HTMLRequest.toString(), SocketBuilderStr = SocketBuilder.toString();
+
+  await page.evaluateOnNewDocument((HTMLRequestStr, SocketBuilderStr) => {
+    const HTMLRequest = new Function(`return (${HTMLRequestStr})`)(), 
+          SocketBuilder = new Function(`return (${SocketBuilderStr})`)();
+    // Inject the original functions into page context
+    const initialiseOnLoad = () => {
+      window.SocketBuilder = new SocketBuilder, window.HTMLRequest = new HTMLRequest;
+    }
+
+    window.addEventListener('DOMContentLoaded', initialiseOnLoad);
+  }, HTMLRequestStr, SocketBuilderStr);
+
+  console.log("class injected");
+}
+
+async function injectWebSocket(page, wsPort, pageId) {
   await page.evaluateOnNewDocument((port, id) => {
-    const initScraper = () => {
-      if (window.scraper) return;
+    window.pageId = id;
 
-      const socket = new WebSocket(`ws://localhost:${port}/${id}`);
-
-      window.scraper = {
-        socket,
-
-        async fetchJson(endpoint, extraHeaders = {}) {
-          try {
-            console.log(`🌐 Fetching: ${endpoint}`);
-
-            const headers = {
-              'Content-Type': 'application/json',
-              'Accept': 'application/json, text/plain, */*',
-              'User-Agent': navigator.userAgent,
-              'Referer': location.href,
-              'Origin': location.origin,
-              ...extraHeaders
-            };
-
-            const response = await fetch(endpoint, {
-              method: 'GET',
-              headers,
-              credentials: 'include'
-            });
-
-            if (!response.ok) throw new Error(`HTTP ${response.status}`);
-
-            const data = await response.json();
-
-            socket.send(JSON.stringify({
-              type: 'success',
-              endpoint,
-              data,
-              timestamp: new Date().toISOString(),
-              pageUrl: location.href,
-              pageId: id
-            }));
-
-            return data;
-          } catch (error) {
-            console.error('❌ Fetch error:', error.message);
-            socket.send(JSON.stringify({
-              type: 'error',
-              endpoint,
-              message: error.message,
-              pageUrl: location.href,
-              pageId: id
-            }));
-            throw error;
-          }
-        }
-      };
+    const initialiseOnLoad = () => {
+      const socket = window.SocketBuilder.create(port, id);
 
       socket.onopen = () => console.log(`✅ WS Connected: ${id}`);
       socket.onerror = (e) => console.error(`WS Error ${id}:`, e);
       socket.onclose = () => console.log(`WS Closed: ${id}`);
     };
 
-    initScraper();
-    setTimeout(initScraper, 500);
-    setTimeout(initScraper, 1500);
+    window.addEventListener('DOMContentLoaded', initialiseOnLoad);
   }, wsPort, pageId);
 
-  console.log(`✅ Injected scraper for ${pageId}`);
+  console.log("socket created and injected");
+}
 
-  await page.evaluate(() => {
-    if (!window.scraper) {
-      console.warn('Scraper not found after navigation, forcing injection...');
-    }
-  });
+async function inject(page, wsPort = 8080, pageId = 'default') {
+  await injectClass(page);
+  await injectWebSocket(page, wsPort, pageId);
+
+  console.log(`✅ Injected scraper for ${pageId}`);
+}
+
+const checkInjection = async (page, timeout) => {
+  console.log('checking injection');
+
+  await page.evaluate(timeout => new Promise((resolve, reject) => {
+        if (!window.HTMLRequest ||typeof window.HTMLRequest.fetch !== 'function')
+          return reject('HTMLRequest unavailable');
+
+        if (!window.socket)
+          return reject('SocketBuilder unavailable');
+
+        if (window.socket.readyState === WebSocket.OPEN)
+          return resolve();
+
+        const timer = setTimeout(() => reject('Timeout'), timeout);
+
+        window.socket.addEventListener('open',() => {
+            clearTimeout(timer);
+            resolve();
+          },{ once: true }
+        );
+
+        window.socket.addEventListener('error',() => {
+            clearTimeout(timer);
+            reject('SocketBuilder error');
+          },{ once: true }
+        );
+      }),
+    timeout
+  );
+  console.log('injection passed');
 }
 
 async function triggerFetch(page, endpoint, timeout = 30_000) {
   console.log(`🚀 Triggering fetch: ${endpoint}`);
+  await checkInjection(page, timeout);
 
-  await page.waitForFunction(() => window.scraper && typeof window.scraper.fetchJson === 'function', {
-    timeout: timeout
-  });
-
-  await page.evaluate((ep) => {
-    return window.scraper.fetchJson(ep);
+  return await page.evaluate((ep) => {
+    return window.HTMLRequest.fetch(ep);
   }, endpoint);
 }
 
-module.exports = { injectWebSocketScraper, triggerFetch };
+module.exports = { inject, triggerFetch };
