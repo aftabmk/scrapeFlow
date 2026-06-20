@@ -1,19 +1,25 @@
-const { SocketBuilder, HTMLRequest } = require('./class');
-// Convert functions to injectable strings
+const { SocketBuilder, HTMLRequest, StorageBucket } = require('./class');
 
 async function injectClass(page) {
-  const HTMLRequestStr = HTMLRequest.toString(), SocketBuilderStr = SocketBuilder.toString();
+  const 
+        HTMLRequestStr = HTMLRequest.toString(), 
+        SocketBuilderStr = SocketBuilder.toString(), 
+        StorageBucketStr = StorageBucket.toString();
 
-  await page.evaluateOnNewDocument((HTMLRequestStr, SocketBuilderStr) => {
-    const HTMLRequest = new Function(`return (${HTMLRequestStr})`)(), 
-          SocketBuilder = new Function(`return (${SocketBuilderStr})`)();
+  await page.evaluateOnNewDocument((HTMLRequestStr, SocketBuilderStr,StorageBucketStr) => {
+    const 
+          HTMLRequest = new Function(`return (${HTMLRequestStr})`)(), 
+          SocketBuilder = new Function(`return (${SocketBuilderStr})`)(),
+          StorageBucket = new Function(`return (${StorageBucketStr})`)();
     // Inject the original functions into page context
     const initialiseOnLoad = () => {
-      window.SocketBuilder = new SocketBuilder, window.HTMLRequest = new HTMLRequest;
+      window.SocketBuilder = new SocketBuilder, 
+      window.HTMLRequest = new HTMLRequest, 
+      window.StorageBucket = new StorageBucket;
     }
 
     window.addEventListener('DOMContentLoaded', initialiseOnLoad);
-  }, HTMLRequestStr, SocketBuilderStr);
+  }, HTMLRequestStr, SocketBuilderStr, StorageBucketStr);
 
   console.log("class injected");
 }
@@ -23,11 +29,7 @@ async function injectWebSocket(page, wsPort, pageId) {
     window.pageId = id;
 
     const initialiseOnLoad = () => {
-      const socket = window.SocketBuilder.create(port, id);
-
-      socket.onopen = () => console.log(`✅ WS Connected: ${id}`);
-      socket.onerror = (e) => console.error(`WS Error ${id}:`, e);
-      socket.onclose = () => console.log(`WS Closed: ${id}`);
+      window.SocketBuilder.create(port, id);
     };
 
     window.addEventListener('DOMContentLoaded', initialiseOnLoad);
