@@ -16,10 +16,18 @@ const fs = require('node:fs');
  * having to pass dbPath explicitly.
  */
 function defaultDbPath() {
-  const invokedScript = process.argv[1] || __filename;
-  const callerFolderName = path.basename(path.dirname(invokedScript));
+    console.log('__dirname =', __dirname);
+    console.log('process.argv[1] =', process.argv[1]);
 
-  return path.join(__dirname, callerFolderName, 'wal.db');
+    const invokedScript = process.argv[1] || __filename;
+    const callerFolderName = path.basename(path.dirname(invokedScript));
+
+    console.log('callerFolderName =', callerFolderName);
+
+    const p = path.join(__dirname, callerFolderName, 'wal.db');
+    console.log('dbPath =', p);
+
+    return p;
 }
 
 /**
