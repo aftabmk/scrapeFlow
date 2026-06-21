@@ -13,7 +13,7 @@ async function main() {
     
     const page1 = await createPage(browser);
     const page2 = await createPage(browser);
-    
+
     await inject(page1, 8080, 'page1');
     await inject(page2, 8080, 'page2');
     
@@ -38,15 +38,9 @@ async function main() {
       type: 'ping'
     });
 
-    console.log(wsServer.list());
-
-    if (wsServer.has('page1')) {
-      console.log('page1 is connected');
-    }
-
-    console.log('Press Ctrl+C to stop...');
-    
-  } catch (error) {
+    console.log(`all connections : ${wsServer.list()}`);  
+  } 
+  catch (error) {
     console.error('❌ Main Error:', error);
   }
 }

@@ -1,7 +1,8 @@
 // Define your functions once (in Node.js scope)
 class SocketBuilder {
   create = (port = 8080, id = 'default') => {
-    const socket = new WebSocket(`ws://localhost:${port}/${id}`);
+    const url = `ws://localhost:${port}/${id}`
+    const socket = new WebSocket(url);
 
     socket.addEventListener('open', () => {
       console.log(`✅ Connected: ${id}`);
@@ -44,7 +45,7 @@ class HTMLRequest {
 
       const data = await response.json();
 
-      window.StorageBucket.set(endpoint,data);
+      window.StorageBucket.set(new Date(Date.now()),{endpont : endpoint, data : data});
 
       window.socket?.send(JSON.stringify({
         type: 'success',
@@ -88,7 +89,7 @@ class StorageBucket {
         const db = request.result;
 
         if (!db.objectStoreNames.contains(this.storeName)) {
-          db.createObjectStore(this.storeName,{keyPath : 'id', autoIncrement : true}); // for appending newer data
+          db.createObjectStore(this.storeName); // for appending newer data
         }
       };
 

@@ -81,8 +81,8 @@ async function triggerFetch(page, endpoint, timeout = 30_000) {
   console.log(`🚀 Triggering fetch: ${endpoint}`);
   await checkInjection(page, timeout);
 
-  return await page.evaluate((ep) => {
-    return window.HTMLRequest.fetch(ep);
+  return await page.evaluate((endpoint) => {
+    return window.HTMLRequest.fetch(endpoint);
   }, endpoint);
 }
 
