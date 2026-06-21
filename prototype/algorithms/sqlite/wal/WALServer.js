@@ -6,41 +6,27 @@ const path = require('node:path');
 const fs = require('node:fs');
 
 /**
- * Default dbPath: <WalServer.js's own directory>/<name of the folder
- * that contains the script which was actually run>/wal.db
- *
- * Example: if `queues/index.js` runs `node queues/index.js`, and
- * WalServer.js lives at the project root, this resolves to
- * `<project root>/queues/wal.db` — so each calling queue folder gets
- * its own db file under WalServer's directory, without the caller
- * having to pass dbPath explicitly.
- */
-function defaultDbPath() {
-    console.log('__dirname =', __dirname);
-    console.log('process.argv[1] =', process.argv[1]);
-
-    const invokedScript = process.argv[1] || __filename;
-    const callerFolderName = path.basename(path.dirname(invokedScript));
-
-    console.log('callerFolderName =', callerFolderName);
-
-    const p = path.join(__dirname, callerFolderName, 'wal.db');
-    console.log('dbPath =', p);
-
-    return p;
-}
-
-/**
  * WalServer
  *
  * Owns the ONE node:sqlite connection. Nothing else in the system
  * touches SQLite directly — every queue's WriteAheadLog talks to this
  * over WebSocket instead.
+ *
+ * DB file location: <thisFileDir>/<callerDirName>/<dbName>
+ * e.g. WALServer.js lives in .../sqlite/wal/, caller is .../algorithms/Queue/test.js
+ *      -> db file ends up at .../sqlite/wal/Queue/.db
  */
 class WalServer {
-  constructor({ port = 8766, dbPath = defaultDbPath() } = {}) {
+  constructor({ port = 8766, dbName = '.db', callerDir } = {}) {
     this.port = port;
-    this.dbPath = dbPath;
+
+    // Resolve the folder name to nest under this file's own directory.
+    // Falls back to require.main.filename's dir if callerDir isn't passed,
+    // but passing callerDir explicitly is preferred — see ensure() below.
+    const resolvedCallerDir = callerDir ?? path.dirname(require.main.filename);
+    const folderName = path.basename(resolvedCallerDir);
+
+    this.dbPath = path.join(__dirname, '..', 'data' ,folderName, dbName);
     this.db = null;
     this.wss = null;
   }
@@ -76,6 +62,7 @@ class WalServer {
         this.wss.on('connection', (ws) => this._handleConnection(ws));
 
         console.log(`[WalServer] listening on ws://localhost:${this.port}`);
+        console.log(`[WalServer] db file: ${this.dbPath}`);
         resolve(this);
       });
 
@@ -128,6 +115,11 @@ class WalServer {
    * port is already taken (another queue process got there first),
    * that's treated as success too — it just means this process will
    * talk to that other process's server as a normal client.
+   *
+   * Pass callerDir: __dirname from wherever you call this, so the db
+   * file nests under a folder named after the calling module's location
+   * (e.g. .../sqlite/wal/Queue/.db) rather than depending on process.cwd()
+   * or require.main, which can be unreliable across different launch setups.
    *
    * Either way, by the time this resolves, a WAL server is guaranteed
    * to be listening on the given port. Returns the WalServer instance

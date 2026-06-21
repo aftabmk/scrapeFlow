@@ -11,7 +11,7 @@ const produceEvents = () => {
 
 const main = async () => {
   // Instantiate the WAL server BEFORE any queue is constructed.
-  const walServer = await WalServer.ensure({ port: 8766, dbPath: "./wal.db" });
+  const walServer = await WalServer.ensure({ port: 8766, callerDir: __dirname });
 
   // queueId scopes this queue's entries on the shared WAL server — needed
   // now that multiple queues can write to the same SQLite-backed WAL.
