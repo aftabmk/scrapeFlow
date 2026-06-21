@@ -18,6 +18,7 @@ const fs = require('node:fs');
 function defaultDbPath() {
   const invokedScript = process.argv[1] || __filename;
   const callerFolderName = path.basename(path.dirname(invokedScript));
+
   return path.join(__dirname, callerFolderName, 'wal.db');
 }
 
