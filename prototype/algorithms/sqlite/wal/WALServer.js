@@ -17,7 +17,7 @@ const fs = require('node:fs');
  *      -> db file ends up at .../sqlite/wal/Queue/.db
  */
 class WalServer {
-  constructor({ port = 8766, dbName = '.db', callerDir } = {}) {
+  constructor({ port = 8766, dbName = '.db' } = {}) {
     this.port = port;
 
     // Resolve the folder name to nest under this file's own directory.
@@ -26,7 +26,7 @@ class WalServer {
     const resolvedCallerDir = callerDir ?? path.dirname(require.main.filename);
     const folderName = path.basename(resolvedCallerDir);
 
-    this.dbPath = path.join(__dirname, '..', 'data' ,folderName, dbName);
+    this.dbPath = path.join(__dirname, '..', 'var' , dbName); // var is industry statndard in unix
     this.db = null;
     this.wss = null;
   }
