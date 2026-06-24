@@ -1,18 +1,20 @@
 const Bus = require("./server/bus.js");
-const Queue = require("./algorithm/queue.js");
+const DurableQueue = require("./algorithm/DurableQueue.js");
 
-const recover = require("./models/recover.js");
+// const recover = require("./models/recover.js");
 
-const mode = process.argv[2];
+const [,,mode] = process.argv;
 
-async function main() {
+const main = async() => {
     const bus = new Bus();
 
-    const queue = new Queue("email", bus, {
+    const queue = new DurableQueue("email", bus, {
         visibilityTimeout: 10000,
         maxRetries: 3
     });
 
+	await queue.recover();
+	
     switch (mode) {
         case "seed":
             await queue.enqueue({ id: 1, email: "a@gmail.com" });
@@ -22,7 +24,7 @@ async function main() {
             break;
 
         case "crash": {
-            await recover(bus, queue);
+            // await recover(bus, queue);
 
             console.log("after recover, queue size:", queue.size());
             console.log("recovered job ids:", [...queue.pending.keys()]);
@@ -41,7 +43,7 @@ async function main() {
         }
 
         case "recover":
-            await recover(bus, queue);
+            // await recover(bus, queue);
 
             console.log("after recover, queue size:", queue.size());
             console.log("recovered job ids:", [...queue.pending.keys()]);
@@ -55,6 +57,8 @@ async function main() {
                 console.log("processing", job.email);
 
                 const ok = await queue.ack(job.id);
+				// queue.ack takes time to reflect in db, 
+				// hence faster update might give old data
 
                 console.log("job acknowledged:", job.id, ok);
             }
@@ -71,3 +75,4 @@ main().catch(err => {
     console.error(err);
     process.exit(1);
 });
+
