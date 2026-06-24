@@ -23,10 +23,8 @@ class WalServer {
     // Resolve the folder name to nest under this file's own directory.
     // Falls back to require.main.filename's dir if callerDir isn't passed,
     // but passing callerDir explicitly is preferred — see ensure() below.
-    const resolvedCallerDir = callerDir ?? path.dirname(require.main.filename);
-    const folderName = path.basename(resolvedCallerDir);
 
-    this.dbPath = path.join(__dirname, '..', 'var' , dbName); // var is industry statndard in unix
+    this.dbPath = path.join(__dirname, '..', 'variable' , dbName); // var is industry statndard in unix
     this.db = null;
     this.wss = null;
   }
