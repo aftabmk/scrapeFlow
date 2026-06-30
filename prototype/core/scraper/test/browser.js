@@ -24,7 +24,7 @@ async function launchBrowser() {
       // '--disable-http2',
       // '--disable-quic',
     ],
-    protocolTimeout: 60_000,
+    protocolTimeout: 30_000,
   });
 
   console.log('✅ Browser launched with NSE + CSP fixes');

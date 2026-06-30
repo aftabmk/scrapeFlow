@@ -2,13 +2,10 @@ require('dotenv').config({ path: require('path').resolve(__dirname, '../../../.e
 
 const { launchBrowser, createPage } = require ('./browser.js');
 const { inject, triggerFetch } = require ('./scraper.js');
-const { createWebSocketServer } = require ('./websocket.js');
 const {PAGE_URL_1,API_URL_1,PAGE_URL_3,API_URL_3} = process.env;
 
 async function main() {
   try {
-    const wsServer = createWebSocketServer(8080);
-
     const browser = await launchBrowser();
     
     const page1 = await createPage(browser);
@@ -29,16 +26,6 @@ async function main() {
       triggerFetch(page2, API_URL_3) 
     ]);
     
-    wsServer.send('page1', {
-      type: 'fetch',
-      url: 'https://api.example.com'
-    });
-
-    wsServer.broadcast({
-      type: 'ping'
-    });
-
-    console.log(`all connections : ${wsServer.list()}`);  
   } 
   catch (error) {
     console.error('❌ Main Error:', error);

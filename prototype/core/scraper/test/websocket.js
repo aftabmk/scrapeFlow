@@ -84,3 +84,13 @@ function createWebSocketServer(port = 8080) {
 }
 
 module.exports = { createWebSocketServer };
+
+if (require.main === module) {
+    const wsServer = createWebSocketServer(8080);
+
+    wsServer.broadcast({
+      type: 'ping'
+    });
+
+    console.log(`all connections : ${wsServer.list()}`);  
+}

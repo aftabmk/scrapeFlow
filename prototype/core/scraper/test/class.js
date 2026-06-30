@@ -26,7 +26,20 @@ class SocketBuilder {
 }
 
 class HTMLRequest {
-  fetch = async (endpoint, extraHeaders = {}) => {
+  fetch = async (endpoint, extraHeaders = {}, { timeoutMs = 15000, signal } = {}) => {
+    const controller = new AbortController();
+
+    // If the caller passed an external signal, forward its abort to our controller
+    const onExternalAbort = () => controller.abort(signal.reason);
+    if (signal) {
+      if (signal.aborted) controller.abort(signal.reason);
+      else signal.addEventListener('abort', onExternalAbort, { once: true });
+    }
+
+    const timeoutId = setTimeout(() => {
+      controller.abort(new DOMException('Request timed out', 'TimeoutError'));
+    }, timeoutMs);
+
     try {
       console.log(`🌐 Fetching: ${endpoint}`);
 
@@ -39,13 +52,18 @@ class HTMLRequest {
         ...extraHeaders
       };
 
-      const response = await fetch(endpoint, {method: 'GET',headers,credentials: 'include'});
+      const response = await fetch(endpoint, {
+        method: 'GET',
+        headers,
+        credentials: 'include',
+        signal: controller.signal
+      });
 
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
       const data = await response.json();
 
-      window.StorageBucket.set(new Date(Date.now()),{endpont : endpoint, data : data});
+      window.StorageBucket.set(new Date(Date.now()), { endpont: endpoint, data: data });
 
       window.socket?.send(JSON.stringify({
         type: 'success',
@@ -58,16 +76,28 @@ class HTMLRequest {
 
       return data;
     } 
-	catch (error) {
-      console.error('❌ Fetch error:', error.message);
+    catch (error) {
+      const isAbort = error.name === 'AbortError' || error.name === 'TimeoutError';
+      const message = isAbort
+        ? (controller.signal.reason?.message || 'Request aborted')
+        : error.message;
+
+      console.error('❌ Fetch error:', message);
+
       window.socket?.send(JSON.stringify({
         type: 'error',
         endpoint,
-        message: error.message,
+        message,
+        aborted: isAbort,
         pageUrl: location.href,
         pageId: window.pageId || 'default'
       }));
+
       throw error;
+    } 
+    finally {
+      clearTimeout(timeoutId);
+      if (signal) signal.removeEventListener('abort', onExternalAbort);
     }
   };
 }

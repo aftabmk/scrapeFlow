@@ -3,7 +3,7 @@ const path = require("path");
 const { WebSocketServer } = require("ws");
 const { DatabaseSync } = require("node:sqlite");
 
-class WalServer {
+class WALServer {
     constructor({
         port = 8080,
         dbPath = path.join(__dirname, "..", "durableQueue", "wal.db")
@@ -11,10 +11,6 @@ class WalServer {
         this.port = port;
         this.dbPath = dbPath;
 
-        // resolve relative to this file's own location, not process.cwd() —
-        // otherwise the db path silently shifts depending on where
-        // `node walServer.js` is launched from, and insert/select end up
-        // hitting two different physical files.
         this.db = new DatabaseSync(this.dbPath);
 
         this.db.exec(`
@@ -92,8 +88,8 @@ class WalServer {
     }
 }
 
-module.exports = WalServer;
+module.exports = WALServer;
 
 if (require.main === module) {
-    new WalServer().listen();
+    new WALServer().listen();
 }

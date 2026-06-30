@@ -76,3 +76,4 @@ main().catch(err => {
     process.exit(1);
 });
 
+// start server in sqlite/server/walServer
