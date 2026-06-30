@@ -33,9 +33,6 @@ const mockContext = {
 
 // Manually execute the function locally and log the final output
 main(mockEvent, mockContext)
-    .then((result) => {
-        console.log("\nExecution Result:\n", JSON.stringify(result, null, 2));
-    })
     .catch((error) => {
         console.error("\nExecution Error:\n", error);
     });
