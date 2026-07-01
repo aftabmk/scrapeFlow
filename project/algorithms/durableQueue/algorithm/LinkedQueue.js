@@ -1,5 +1,5 @@
 const Node = require("./Node");
-
+const Bus = require('../server/bus');
 class LinkedQueue {
 
     constructor(name) {
@@ -8,6 +8,7 @@ class LinkedQueue {
         this.head = null;
         this.tail = null;
 
+        this.bus = new Bus();
         this.pending = new Map();
     }
 

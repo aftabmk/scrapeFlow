@@ -3,9 +3,10 @@ const eventPayload = require('./event.json');
 const ProcessSupervisor = require('./process/ProcessSupervisor');
 
 const processSpecs = [
-  { name: 'browser', file: './process/browserProcess.js', dependsOn: [] },
-  { name: 'queue',   file: './process/queueProcess.js',   dependsOn: ['browser'] },
-  { name: 'jobs',    file: './process/jobsProcess.js',    dependsOn: ['queue'] },
+  { name: 'browser',  file: './process/browserProcess.js', dependsOn: [] },
+  // { name: 'walServer',file: './algorithms/sqlite/server/WALServer.js', dependsOn: [] },
+  { name: 'jobs',     file: './process/jobsProcess.js',    dependsOn: ['queue'] },
+  { name: 'queue',    file: './process/queueProcess.js',   dependsOn: ['browser'/*,'walServer'*/] },
 ];
 
 const supervisor = new ProcessSupervisor(processSpecs);

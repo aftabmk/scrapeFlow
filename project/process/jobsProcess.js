@@ -10,6 +10,7 @@ process.on('message', (msg) => {
 
     const jobBuilder = new JobBuilder(data);
     const jobs = jobBuilder.buildAll();
+    
     jobs.forEach(job => process.send({ type: 'enqueue', job }));
   }
 

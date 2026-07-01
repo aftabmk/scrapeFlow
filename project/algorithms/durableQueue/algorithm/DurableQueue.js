@@ -4,14 +4,13 @@ class DurableQueue extends RecoverableQueue {
 
     constructor(
         name,
-        bus,
         {
             visibilityTimeout = 30000,
             maxRetries = 5
         } = {}
     ) {
 
-        super(name, bus);
+        super(name);
 
         this.visibilityTimeout = visibilityTimeout;
         this.maxRetries = maxRetries;

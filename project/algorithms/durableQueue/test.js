@@ -8,7 +8,7 @@ const [,,mode] = process.argv;
 const main = async() => {
     const bus = new Bus();
 
-    const queue = new DurableQueue("email", bus, {
+    const queue = new DurableQueue("email" , {
         visibilityTimeout: 10000,
         maxRetries: 3
     });

@@ -1,21 +1,20 @@
 // queueProcess.js
-const bus = require('../algorithms/durableQueue/server/bus');
 const DurableQueue = require('../algorithms/durableQueue/algorithm/DurableQueue');
 
-const queue = new DurableQueue("email", bus, {
+const queue = new DurableQueue("Queue", {
       visibilityTimeout: 10000,
       maxRetries: 3
   });
 
 process.send({ type: 'ready' });
 
-process.on('message', (msg) => {
+process.on('message', async (msg) => {
   if (msg.type === 'enqueue') {
-    queue.enqueue(msg.job);
+    await queue.enqueue(msg.job);
   }
 
   if (msg.type === 'dequeue-request') {
-    const jobs = queue.dequeue(msg.batchSize);
+    const jobs = await queue.dequeue(msg.batchSize);
     process.send({ type: 'dequeue-response', jobs, requestId: msg.requestId });
   }
 

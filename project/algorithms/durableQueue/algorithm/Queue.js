@@ -5,7 +5,7 @@ class Queue extends LinkedQueue {
     constructor(name, bus) {
         super(name);
 
-        this.bus = bus;
+        // this.bus = bus;
     }
 
     async enqueue(job) {
