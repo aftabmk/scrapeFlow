@@ -10,26 +10,32 @@ const main = async () => {
     process.send({ type: 'ready' });
 
     process.on('message', async (msg) => {
-      if (msg.type === 'trigger-poll') {
-        process.send({ type: 'dequeue-request', batchSize: 4, requestId: Date.now() });
+      switch(msg.type) {
+        case 'trigger-poll' : 
+          process.send({ type: 'dequeue-request', batchSize: 4, requestId: Date.now() });
+          break;
+
+        case 'dequeue-response' : 
+          const job = Object.assign(Object.create(Job.prototype), msg.jobs);
+          const id = job.decode();
+    
+          console.log('end');
+          // for (const job of msg.jobs) {
+          //   try {
+          //     // await browser.runJob(job); // builds tab, loads job.url, fetches job.api
+          //     process.send({ type: 'ack', jobId: job.id });
+          //   } catch (err) {
+          //     process.send({ type: 'nack', jobId: job.id });
+          //   }
+          // }
+          break;
+
+        default : console.log(`message type : ${msg.type}`)
       }
 
-      if (msg.type === 'dequeue-response') {
-        const job = Object.assign(Object.create(Job.prototype), msg.jobs);
-        const id = job.decode();
-
-        console.log('end');
-        // for (const job of msg.jobs) {
-        //   try {
-        //     // await browser.runJob(job); // builds tab, loads job.url, fetches job.api
-        //     process.send({ type: 'ack', jobId: job.id });
-        //   } catch (err) {
-        //     process.send({ type: 'nack', jobId: job.id });
-        //   }
-        // }
-      }
     });
-  } catch (err) {
+  } 
+  catch (err) {
     console.error('[browserProcess] failed to initialize:', err);
     process.exit(1);
   }

@@ -9,21 +9,21 @@ const queue = new DurableQueue("Queue", {
 process.send({ type: 'ready' });
 
 process.on('message', async (msg) => {
-  if (msg.type === 'enqueue') {
-    await queue.enqueue(msg.job);
-  }
-
-  if (msg.type === 'dequeue-request') {
-    const jobs = await queue.dequeue(msg.batchSize);
-    process.send({ type: 'dequeue-response', jobs, requestId: msg.requestId });
-  }
-
-  if (msg.type === 'ack') {
-    queue.ack(msg.jobId);
-    process.send({ type: 'ack-confirm', jobId: msg.jobId });
-  }
-
-  if (msg.type === 'nack') {
-    queue.nack(msg.jobId);
+  switch(msg.type) {
+    case 'enqueue' :
+      await queue.enqueue(msg.job);
+      break;
+    case 'dequeue-request' :
+      const jobs = await queue.dequeue(msg.batchSize);
+      process.send({ type: 'dequeue-response', jobs, requestId: msg.requestId });
+      break;
+    case 'ack' :
+      queue.ack(msg.jobId);
+      process.send({ type: 'ack-confirm', jobId: msg.jobId });
+      break;
+    case 'nack' : 
+      queue.nack(msg.jobId);
+      break;
+    default : console.log(`message type ${msg.type}`);
   }
 });
