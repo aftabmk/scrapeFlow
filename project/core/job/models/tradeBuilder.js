@@ -1,4 +1,5 @@
-const { EXCHANGE_1,EXCHANGE_100 } = process.env;
+require('dotenv').config({ path: require('path').resolve(__dirname, '../../../.env') });
+const { EXCHANGE_1 ,EXCHANGE_100 } = process.env;
 
 class TradeIdBuilder {
     static EXCHANGE = {

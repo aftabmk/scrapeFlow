@@ -14,7 +14,6 @@ class JobBuilder {
     }
 
     const jobs = [];
-
     for (const event of this.events) {
       try {
         if (!event) {

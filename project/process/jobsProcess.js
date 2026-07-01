@@ -1,17 +1,15 @@
 // jobsProcess.js
-const Job = require('./Job');
+const { JobBuilder } = require('../core/job/models/jobBuilder');
 
 process.send({ type: 'ready' });
 
 process.on('message', (msg) => {
   if (msg.type === 'start') {
     // msg.payload mimics a lambda-style event: array of { url, api }
-    const jobsData = msg.payload || [];
+    const data = msg.payload || [];
 
-    const jobs = jobsData.map((data, idx) =>
-      new Job({ id: idx + 1, url: data.url, api: data.api })
-    );
-
+    const jobBuilder = new JobBuilder(data);
+    const jobs = jobBuilder.buildAll();
     jobs.forEach(job => process.send({ type: 'enqueue', job }));
   }
 

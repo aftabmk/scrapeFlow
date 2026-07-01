@@ -1,7 +1,11 @@
 // queueProcess.js
-const DurableQueue = require('./DurableQueue');
+const bus = require('../algorithms/durableQueue/server/bus');
+const DurableQueue = require('../algorithms/durableQueue/algorithm/DurableQueue');
 
-const queue = new DurableQueue();
+const queue = new DurableQueue("email", bus, {
+      visibilityTimeout: 10000,
+      maxRetries: 3
+  });
 
 process.send({ type: 'ready' });
 

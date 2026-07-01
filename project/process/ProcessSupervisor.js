@@ -1,6 +1,7 @@
-// ProcessSupervisor.js  (only the `start` method changed — rest stays identical)
+// ProcessSupervisor.js
 const { fork } = require('child_process');
-const TopoSort = require('./TopoSort');
+const { Graph } = require('../algorithms/TopologicalSort/models/graph.js');
+const { TopologicalSort } = require('../algorithms/TopologicalSort/algorithms/topologicalSort.js');
 
 class ProcessSupervisor {
   constructor(specs) {
@@ -9,14 +10,32 @@ class ProcessSupervisor {
   }
 
   resolveStartOrder() {
-    const sorter = new TopoSort();
-    this.specs.forEach(spec => sorter.addNode(spec.name, spec.dependsOn));
-    return sorter.sort();
+    const graph = new Graph();
+
+    // make sure every process appears as a node, even with no deps
+    this.specs.forEach(spec => {
+      graph.addNode?.(spec.name); // safe no-op if Graph has no addNode method
+    });
+
+    this.specs.forEach(spec => {
+      const deps = Array.isArray(spec.dependsOn)
+        ? spec.dependsOn
+        : (spec.dependsOn ? [spec.dependsOn] : []);
+
+      deps.forEach(dep => {
+        // dep must start before spec.name -> edge dep -> spec.name
+        graph.addEdge(dep, spec.name);
+      });
+    });
+
+    return TopologicalSort.kahn(graph);
   }
 
   async startInOrder(sortedNames) {
     for (const name of sortedNames) {
       const spec = this.specs.find(s => s.name === name);
+      if (!spec) continue; // guards against nodes with no matching spec, if any
+
       const proc = fork(spec.file);
 
       await new Promise((resolve) => {
@@ -62,7 +81,6 @@ class ProcessSupervisor {
     await this.startInOrder(sortedNames);
     this.wireProcesses();
 
-    // pass the lambda-style payload into the jobs process
     this.procs.jobs.send({ type: 'start', payload: eventPayload });
     this.startPolling();
   }
