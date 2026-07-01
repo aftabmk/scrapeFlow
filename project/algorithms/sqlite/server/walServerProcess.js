@@ -1,14 +1,10 @@
 const path = require("path");
-
-const { WebSocketServer } = require("ws");
 const { DatabaseSync } = require("node:sqlite");
 
 class WALServer {
     constructor({
-        port = 8080,
         dbPath = path.join(__dirname, "..", "durableQueue", "wal.db")
     } = {}) {
-        this.port = port;
         this.dbPath = dbPath;
 
         this.db = new DatabaseSync(this.dbPath);
@@ -35,8 +31,6 @@ class WALServer {
             WHERE queue = ?
             ORDER BY seq
         `);
-
-        this.wss = null;
     }
 
     log(message, extra = {}) {
@@ -74,49 +68,51 @@ class WALServer {
         return this.selectStmt.all(queueName);
     }
 
-    handleMessage(ws, raw) {
-        const msg = JSON.parse(raw);
-
+    handleMessage(msg) {
         switch (msg.op) {
             case "recover": {
                 const rows = this.select(msg.queue);
 
-                ws.send(JSON.stringify({
-                    op: "recover",
+                process.send({
+                    type: "recover-response",
+                    requestId: msg.requestId,
                     queue: msg.queue,
                     rows
-                }));
+                });
 
                 break;
             }
 
             default:
                 this.insert(msg);
+
+                // ack the write back to whoever sent it, if they asked for one
+                if (msg.requestId) {
+                    process.send({
+                        type: "write-ack",
+                        requestId: msg.requestId,
+                        id: msg.id
+                    });
+                }
+
                 break;
         }
     }
 
     listen() {
-        this.wss = new WebSocketServer({ port: this.port });
-
-        this.wss.on("listening", () => {
-            this.log("running", { port: this.port });
-
-            if (process.send) {
-                process.send({ type: "ready" });
+        process.on("message", (msg) => {
+            try {
+                this.handleMessage(msg);
+            } catch (err) {
+                this.error("failed to handle message", err);
             }
         });
 
-        this.wss.on("error", (err) => {
-            this.error("failed to start", err);
-            process.exit(1);
-        });
+        this.log("running");
 
-        this.wss.on("connection", ws => {
-            ws.on("message", raw => this.handleMessage(ws, raw));
-        });
-
-        return this.wss;
+        if (process.send) {
+            process.send({ type: "ready" });
+        }
     }
 }
 
