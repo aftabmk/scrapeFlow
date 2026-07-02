@@ -1,6 +1,7 @@
 // main.js
 const eventPayload = require('./event.json');
 const { NODES, PATH, DEPENDENCY } = require('./utils/enums');
+
 const ProcessSupervisor = require('./src/ProcessSupervisor');
 
 const processSpecs = [

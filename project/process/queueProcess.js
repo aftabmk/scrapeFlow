@@ -14,15 +14,16 @@ process.on('message', async (msg) => {
       await queue.enqueue(msg.job);
       break;
     case 'dequeue-request' :
-      const jobs = await queue.dequeue(msg.batchSize);
+      let size = msg.batchSize, jobs = [];
+      while(size --) {
+        const job = await queue.dequeue(msg.batchSize);
+        jobs.push(job);
+      }
       process.send({ type: 'dequeue-response', jobs, requestId: msg.requestId });
       break;
     case 'ack' :
       queue.ack(msg.jobId);
       process.send({ type: 'ack-confirm', jobId: msg.jobId });
-      break;
-    case 'nack' : 
-      queue.nack(msg.jobId);
       break;
     default : console.log(`message type ${msg.type}`);
   }
