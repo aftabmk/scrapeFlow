@@ -14,12 +14,24 @@ process.on('message', async (msg) => {
       await queue.enqueue(msg.job);
       break;
     case 'dequeue-request' :
-      let size = msg.batchSize, jobs = [];
-      while(size --) {
-        const job = await queue.dequeue(msg.batchSize);
+      const jobs = [];
+      const { batchSize, requestId } = msg;
+
+      for (let i = 0; i < batchSize; i++) {
+        const job = await queue.dequeue();
+
+        if (job === null) {
+          continue;
+        }
+
         jobs.push(job);
       }
-      process.send({ type: 'dequeue-response', jobs, requestId: msg.requestId });
+
+      process.send({
+        type: 'dequeue-response',
+        jobs,
+        requestId,
+      });
       break;
     case 'ack' :
       queue.ack(msg.jobId);

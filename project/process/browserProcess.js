@@ -33,8 +33,6 @@ const main = async () => {
               console.error(`[browserProcess] job ${job.id} failed, letting visibility timeout requeue it:`, err.message);
             }
           }
-
-          console.log('end');
           break;
         }
 

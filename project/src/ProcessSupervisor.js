@@ -8,8 +8,8 @@ class ProcessSupervisor {
     this.specs = specs;
     this.procs = {};
 
-    this.startupManager = new StartupManager(specs);
     this.messageRouter = new MessageRouter();
+    this.startupManager = new StartupManager(specs);
   }
 
   async startInOrder() {
