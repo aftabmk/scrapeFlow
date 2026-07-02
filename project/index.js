@@ -1,12 +1,12 @@
 // main.js
 const eventPayload = require('./event.json');
-const ProcessSupervisor = require('./process/ProcessSupervisor');
+const ProcessSupervisor = require('./src/ProcessSupervisor');
 
 const processSpecs = [
   { name: 'browser',  file: './process/browserProcess.js', dependsOn: [] },
   { name: 'walServer',file: './algorithms/sqlite/server/walServer.js', dependsOn: [] },
   { name: 'jobs',     file: './process/jobsProcess.js',    dependsOn: ['queue'] },
-  { name: 'queue',    file: './process/queueProcess.js',   dependsOn: ['browser'/*,'walServer'*/] },
+  { name: 'queue',    file: './process/queueProcess.js',   dependsOn: ['browser','walServer'] },
 ];
 
 const supervisor = new ProcessSupervisor(processSpecs);
