@@ -1,41 +1,56 @@
 const { WebSocketServer, WebSocket } = require('ws');
 
-function createWebSocketServer(port = 8080) {
-  const wss = new WebSocketServer({ port });
+class WSManager {
+  static wss = null;
+  static connections = new Map();
 
-  console.log(`✅ WebSocket Server running on ws://localhost:${port}`);
+  constructor() {
+    throw new Error('WSManager is a static class and cannot be instantiated');
+  }
 
-  const connections = new Map();
+  static start(port = 8080) {
+    if (this.wss) {
+      console.log(`⚠️ WebSocket Server already running`);
+      return this.wss;
+    }
 
-  wss.on('connection', (ws, req) => {
-    const pageId = (req.url || '/default').split('/').pop() || 'default';
+    this.wss = new WebSocketServer({ port });
 
-    console.log(`📡 Browser connected: ${pageId}`);
+    console.log(`✅ WebSocket Server running on ws://localhost:${port}`);
 
-    connections.set(pageId, ws);
+    this.wss.on('connection', (ws, req) => {
+      const pageId =
+        (req.url || '/default').split('/').pop() || 'default';
 
-    ws.on('message', (message) => {
-      try {
-        const data = JSON.parse(message);
-        console.log(`📥 [${pageId}]`, data);
-      } catch {
-        console.log(`📥 [${pageId}]`, message.toString());
-      }
+      console.log(`📡 Browser connected: ${pageId}`);
+
+      this.connections.set(pageId, ws);
+
+      ws.on('message', (message) => {
+        try {
+          const data = JSON.parse(message);
+          console.log(`📥 [${pageId}] :`, data.type);
+        } catch {
+          console.log(`📥 [${pageId}]`, message.toString());
+        }
+      });
+
+      ws.on('close', () => {
+        console.log(`❌ Browser disconnected: ${pageId}`);
+        this.connections.delete(pageId);
+      });
+
+      ws.on('error', (err) => {
+        console.error(`❌ WS Error (${pageId}):`, err.message);
+        this.connections.delete(pageId);
+      });
     });
 
-    ws.on('close', () => {
-      console.log(`❌ Browser disconnected: ${pageId}`);
-      connections.delete(pageId);
-    });
+    return this.wss;
+  }
 
-    ws.on('error', (err) => {
-      console.error(`❌ WS Error (${pageId}):`, err.message);
-      connections.delete(pageId);
-    });
-  });
-
-  const send = (pageId, data) => {
-    const ws = connections.get(pageId);
+  static send(pageId, data) {
+    const ws = this.connections.get(pageId);
 
     if (!ws)
       throw new Error(`No connection found for '${pageId}'`);
@@ -48,49 +63,76 @@ function createWebSocketServer(port = 8080) {
         ? data
         : JSON.stringify(data)
     );
-  };
+  }
 
-  const broadcast = (data) => {
+  static broadcast(data) {
     const payload =
       typeof data === 'string'
         ? data
         : JSON.stringify(data);
 
-    for (const ws of connections.values()) {
+    for (const ws of this.connections.values()) {
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(payload);
       }
     }
-  };
+  }
 
-  const get = (pageId) => connections.get(pageId);
+  static get(pageId) {
+    return this.connections.get(pageId);
+  }
 
-  const has = (pageId) => {
-    const ws = connections.get(pageId);
-    return ws && ws.readyState === WebSocket.OPEN;
-  };
+  static has(pageId) {
+    const ws = this.connections.get(pageId);
+    return !!ws && ws.readyState === WebSocket.OPEN;
+  }
 
-  const list = () => [...connections.keys()];
+  static list() {
+    return [...this.connections.keys()];
+  }
 
-  return {
-    wss,
-    connections,
-    send,
-    broadcast,
-    get,
-    has,
-    list
-  };
+  static stop() {
+    if (!this.wss) return;
+
+    for (const ws of this.connections.values()) {
+      ws.close();
+    }
+
+    this.connections.clear();
+    this.wss.close();
+    this.wss = null;
+
+    console.log('🛑 WebSocket Server stopped');
+  }
 }
 
-module.exports = { createWebSocketServer };
+module.exports = WSManager;
 
+// Run directly
 if (require.main === module) {
-    const wsServer = createWebSocketServer(8080);
+  WSManager.start(8080);
 
-    wsServer.broadcast({
-      type: 'ping'
-    });
+  WSManager.broadcast({
+    type: 'ping'
+  });
 
-    console.log(`all connections : ${wsServer.list()}`);  
+  console.log('all connections:', WSManager.list());
 }
+
+
+process.on('message', (msg) => {
+  if (msg.cmd === 'start') {
+    try {
+      const wss = WSManager.start(msg.port || 8080);
+      // wss.on('listening', ...) - only if 'start' doesn't already guarantee bound socket
+      process.send({ type: 'ready' });
+    } catch (err) {
+      process.send({ type: 'error', error: err.message });
+    }
+  }
+
+  if (msg.cmd === 'stop') {
+    WSManager.stop();
+    process.exit(0);
+  }
+});

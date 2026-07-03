@@ -1,66 +1,64 @@
-const puppeteerExtra = require('puppeteer-extra');
-const StealthPlugin = require('puppeteer-extra-plugin-stealth');
+const BrowserManager = require('./browserManager.js');
+const { inject, triggerFetch } = require('./scraper.js');
+const { PAGE_URL_1, API_URL_1, PAGE_URL_3, API_URL_3 } = process.env;
 
-puppeteerExtra.use(StealthPlugin());
+// url -> { page, loaded: true }
+const pageCache = new Map();
+let launched = false;
 
-let browserInstance = null;
+async function getPage(url) {
+  if (pageCache.has(url)) {
+    console.log(`♻️  Reusing cached page for: ${url}`);
+    return pageCache.get(url);
+  }
 
-async function launchBrowser() {
-  if (browserInstance) return browserInstance;
-
-  browserInstance = await puppeteerExtra.launch({
-    headless: false,
-    devtools: true,
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-web-security',
-      // '--allow-insecure-localhost',
-      // '--remote-allow-origins=*',
-      // '--disable-features=IsolateOrigins,site-per-process,LocalNetworkAccess,ContentSecurityPolicy',
-      // '--disable-site-isolation-trials',
-      // '--ignore-certificate-errors',
-      // '--disable-blink-features=AutomationControlled',
-      // '--disable-http2',
-      // '--disable-quic',
-    ],
-    protocolTimeout: 30_000,
-  });
-
-  console.log('✅ Browser launched with NSE + CSP fixes');
-  return browserInstance;
-}
-
-async function createPage(browser) {
-  const page = await browser.newPage();
-  
-  await page.setBypassCSP(true);
-  await page.setViewport({ width: 1366, height: 768 });
-  await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36');
-
-  await page.setRequestInterception(true);
-
-  page.on('request', (req) => {
-    const resourceType = req.resourceType();
-    const url = req.url();
-
-    if (resourceType === 'document' || 
-        resourceType === 'fetch' || 
-        resourceType === 'xhr') {
-      req.continue();
-      return;
-    }
-
-    if (['image', 'stylesheet', 'font', 'media', 'script', 'other'].includes(resourceType)) {
-      req.abort();
-      return;
-    }
-
-    req.continue(); 
-  });
-
-  console.log('✅ Page created with strict request interceptor (HTML + Fetch only)');
+  const page = await BrowserManager.createPage();
+  pageCache.set(url, page);
   return page;
 }
 
-module.exports = { launchBrowser, createPage };
+async function browser() {
+  if (!launched) {
+    await BrowserManager.launch();
+    launched = true;
+  }
+
+  const isPage1New = !pageCache.has(PAGE_URL_1);
+  const isPage3New = !pageCache.has(PAGE_URL_3);
+
+  const page1 = await getPage(PAGE_URL_1);
+  const page2 = await getPage(PAGE_URL_3);
+
+  if (isPage1New) await inject(page1, 8080, 'page1');
+  if (isPage3New) await inject(page2, 8080, 'page2');
+
+  await Promise.all([
+    isPage1New
+      ? page1.goto(PAGE_URL_1, { waitUntil: 'domcontentloaded' })
+      : Promise.resolve(),
+    isPage3New
+      ? page2.goto(PAGE_URL_3, { waitUntil: 'domcontentloaded' })
+      : Promise.resolve(),
+  ]);
+
+  console.log('\n🎯 WebSocket Scraper Ready!');
+
+  const results = await Promise.all([
+    triggerFetch(page1, API_URL_1),
+    triggerFetch(page2, API_URL_3),
+  ]);
+
+  // no page.close() — pages stay alive for reuse on next warm invocation
+  return results;
+}
+
+process.on('message', async (msg) => {
+  if (msg.cmd === 'scrape') {
+    try {
+      const data = await browser();
+      process.send({ type: 'done', data });
+    } catch (err) {
+      process.send({ type: 'error', error: err.message });
+    }
+  }
+});

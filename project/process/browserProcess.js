@@ -2,11 +2,11 @@
 const { Job } = require('../core/job/models/job');
 const Browser = require('../core/scraper/core/browser/browser');
 
-const main = async () => {
+const browserProcess = async () => {
   try {
     const browser = Browser.getInstance();
     // await browser.init();
-    
+
     process.send({ type: 'ready' });
 
     process.on('message', async (msg) => {
@@ -14,16 +14,16 @@ const main = async () => {
         case 'trigger-poll':
           process.send({ type: 'dequeue-request', batchSize: 4, requestId: Date.now() });
           break;
-          
-          case 'dequeue-response': {
-            const jobs = msg.jobs.map(raw =>
-              Object.assign(Object.create(Job.prototype), raw)
-            );
-            
-            for (const job of jobs) {
-              try {
+
+        case 'dequeue-response': {
+          const jobs = msg.jobs.map(raw =>
+            Object.assign(Object.create(Job.prototype), raw)
+          );
+
+          for (const job of jobs) {
+            try {
               const decoded = job.decode();
-              
+
               // await browser.runJob(decoded); // builds tab, loads job.url, fetches job.api
               // await browser.healthCheck();
 
@@ -47,4 +47,4 @@ const main = async () => {
   }
 };
 
-main();
+browserProcess();
