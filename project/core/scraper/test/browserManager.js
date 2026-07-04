@@ -1,10 +1,138 @@
-const puppeteerExtra = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 
-puppeteerExtra.use(StealthPlugin());
+// --- Environment detection -------------------------------------------------
+//
+// Explicit override always wins. Set this in your Lambda's environment
+// config (not relying on AWS-provided vars) if auto-detection ever
+// misfires — e.g. because a bundler (webpack/esbuild/serverless-webpack)
+// statically inlined `process.env.AWS_LAMBDA_FUNCTION_NAME` at BUILD time
+// using the build machine's env (which won't have it), silently baking in
+// "local" mode forever regardless of the real runtime. Reading via bracket
+// notation and checking multiple signals makes that less likely, but an
+// explicit override removes the ambiguity entirely.
+//
+//   process.env.BROWSER_RUNTIME = 'lambda' | 'local'
+//
+function detectIsLambda() {
+  const override = process.env['BROWSER_RUNTIME'];
+  if (override === 'lambda') return true;
+  if (override === 'local') return false;
+
+  return !!(
+    process.env['AWS_LAMBDA_FUNCTION_NAME'] ||
+    process.env['LAMBDA_TASK_ROOT'] ||
+    process.env['AWS_EXECUTION_ENV'] ||
+    process.env['AWS_LAMBDA_RUNTIME_API']
+  );
+}
+
+const USER_AGENT =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
+  '(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36';
+
+// Local/dev: block everything non-essential, including scripts — pages are
+// only used as a fetch/WebSocket sandbox, not rendered.
+const BLOCKED_RESOURCE_TYPES_LOCAL = new Set([
+  'image',
+  'stylesheet',
+  'font',
+  'media',
+  'script',
+  'other',
+]);
+
+// Lambda: 'script' is intentionally NOT blocked — most exchange sites
+// (NSE/BSE) are JS-rendered SPAs and blocking script will break them.
+const BLOCKED_RESOURCE_TYPES_LAMBDA = new Set([
+  'image',
+  'stylesheet',
+  'font',
+  'media',
+]);
+
+// --- Lazy, per-mode module + launch-option resolution -----------------------
+//
+// Requires happen inside these functions (not at module top-level) so:
+//   1) a wrong detection doesn't crash the whole module at import/cold-start
+//      time before you even get a chance to see a useful error,
+//   2) each mode only ever requires the packages it actually needs — the
+//      Lambda path never touches 'puppeteer' (full), the local path never
+//      touches '@sparticuz/chromium'.
+// Both are wrapped in try/catch with an error that names the missing
+// package and the mode that was selected, so a "not loading" failure is
+// diagnosable from the thrown message instead of a bare MODULE_NOT_FOUND.
+
+function buildLambdaExtra() {
+  try {
+    const chromium = require('@sparticuz/chromium');
+    const puppeteerCore = require('puppeteer-core');
+    const { addExtra } = require('puppeteer-extra');
+
+    const puppeteerExtra = addExtra(puppeteerCore);
+
+    const resolveLaunchOptions = async () => ({
+      args: chromium.args,
+      defaultViewport: chromium.defaultViewport,
+      executablePath: await chromium.executablePath(),
+      headless: chromium.headless,
+    });
+
+    return { puppeteerExtra, resolveLaunchOptions };
+  } catch (err) {
+    throw new Error(
+      `BrowserManager selected LAMBDA mode but failed to load its dependencies ` +
+        `(@sparticuz/chromium / puppeteer-core / puppeteer-extra). Make sure these ` +
+        `are installed and bundled into the deployment package. Original error: ${err.message}`
+    );
+  }
+}
+
+function buildLocalExtra() {
+  try {
+    const puppeteerExtra = require('puppeteer-extra');
+
+    const resolveLaunchOptions = async () => ({
+      headless: false,
+      devtools: true,
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-web-security',
+      ],
+      protocolTimeout: 30_000,
+    });
+
+    return { puppeteerExtra, resolveLaunchOptions };
+  } catch (err) {
+    throw new Error(
+      `BrowserManager selected LOCAL mode but failed to load 'puppeteer-extra' ` +
+        `(and its 'puppeteer' dependency). If this is actually running in Lambda, ` +
+        `set process.env.BROWSER_RUNTIME = 'lambda' explicitly. Original error: ${err.message}`
+    );
+  }
+}
+
+let cached = null; // { isLambda, puppeteerExtra, resolveLaunchOptions } — resolved once, lazily
+
+function resolveEnvironment() {
+  if (cached) return cached;
+
+  const isLambda = detectIsLambda();
+  const { puppeteerExtra, resolveLaunchOptions } = isLambda
+    ? buildLambdaExtra()
+    : buildLocalExtra();
+
+  puppeteerExtra.use(StealthPlugin());
+
+  console.log(`🔎 BrowserManager mode: ${isLambda ? 'lambda' : 'local'}`);
+
+  cached = { isLambda, puppeteerExtra, resolveLaunchOptions };
+  return cached;
+}
 
 class BrowserManager {
   static browser = null;
+  static launching = null; // in-flight launch promise, guards concurrent launches
 
   constructor() {
     throw new Error(
@@ -13,43 +141,47 @@ class BrowserManager {
   }
 
   static async launch() {
-    if (this.browser) {
+    // Verify liveness, not just presence of the reference.
+    if (this.browser && this.browser.isConnected()) {
       console.log('♻️ Browser reused');
       return this.browser;
     }
 
-    this.browser = await puppeteerExtra.launch({
-      headless: false,
-      devtools: true,
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-web-security',
-        // '--allow-insecure-localhost',
-        // '--remote-allow-origins=*',
-        // '--disable-features=IsolateOrigins,site-per-process,LocalNetworkAccess,ContentSecurityPolicy',
-        // '--disable-site-isolation-trials',
-        // '--ignore-certificate-errors',
-        // '--disable-blink-features=AutomationControlled',
-        // '--disable-http2',
-        // '--disable-quic',
-      ],
-      protocolTimeout: 30_000,
-    });
+    // If a launch is already in progress (e.g. concurrent calls on a cold
+    // start), wait on it instead of starting a second Chromium process.
+    if (this.launching) {
+      return this.launching;
+    }
 
-    console.log('✅ Browser launched with NSE + CSP fixes');
+    this.launching = (async () => {
+      const { puppeteerExtra, resolveLaunchOptions, isLambda } =
+        resolveEnvironment();
 
-    this.browser.on('disconnected', () => {
-      console.log('❌ Browser disconnected');
-      this.browser = null;
-    });
+      const options = await resolveLaunchOptions();
+      const browser = await puppeteerExtra.launch(options);
 
-    return this.browser;
+      browser.on('disconnected', () => {
+        console.log('❌ Browser disconnected');
+        this.browser = null;
+      });
+
+      this.browser = browser;
+      console.log(
+        `✅ Browser launched with NSE + CSP fixes (${isLambda ? 'lambda' : 'local'} mode)`
+      );
+      return browser;
+    })();
+
+    try {
+      return await this.launching;
+    } finally {
+      this.launching = null;
+    }
   }
 
   static async createPage() {
     const browser = await this.launch();
-
+    const { isLambda } = resolveEnvironment();
     const page = await browser.newPage();
 
     await page.setBypassCSP(true);
@@ -59,42 +191,22 @@ class BrowserManager {
       height: 768,
     });
 
-    await page.setUserAgent(
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36'
-    );
+    await page.setUserAgent(USER_AGENT);
 
     await page.setRequestInterception(true);
 
+    const blockedTypes = isLambda
+      ? BLOCKED_RESOURCE_TYPES_LAMBDA
+      : BLOCKED_RESOURCE_TYPES_LOCAL;
+
     page.on('request', (req) => {
-      const type = req.resourceType();
-
-      if (
-        type === 'document' ||
-        type === 'fetch' ||
-        type === 'xhr'
-      ) {
-        return req.continue();
-      }
-
-      if (
-        [
-          'image',
-          'stylesheet',
-          'font',
-          'media',
-          'script',
-          'other',
-        ].includes(type)
-      ) {
+      if (blockedTypes.has(req.resourceType())) {
         return req.abort();
       }
-
-      req.continue();
+      return req.continue();
     });
 
-    console.log(
-      '✅ Page created with strict request interceptor'
-    );
+    console.log('✅ Page created with strict request interceptor');
 
     return page;
   }
@@ -104,7 +216,7 @@ class BrowserManager {
   }
 
   static has() {
-    return !!this.browser;
+    return !!(this.browser && this.browser.isConnected());
   }
 
   static async close() {
@@ -123,12 +235,8 @@ module.exports = BrowserManager;
 if (require.main === module) {
   (async () => {
     await BrowserManager.launch();
+    await BrowserManager.createPage();
 
-    const page = await BrowserManager.createPage();
-
-    console.log(
-      'Browser active:',
-      BrowserManager.has()
-    );
+    console.log('Browser active:', BrowserManager.has());
   })();
 }

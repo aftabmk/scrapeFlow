@@ -2,7 +2,7 @@ const BrowserManager = require('./browserManager.js');
 const { inject, triggerFetch } = require('./scraper.js');
 const { PAGE_URL_1, API_URL_1, PAGE_URL_3, API_URL_3 } = process.env;
 
-// url -> { page, loaded: true }
+// url -> page (kept alive across warm invocations)
 const pageCache = new Map();
 let launched = false;
 
@@ -17,7 +17,7 @@ async function getPage(url) {
   return page;
 }
 
-async function browser() {
+async function scrape() {
   if (!launched) {
     await BrowserManager.launch();
     launched = true;
@@ -43,22 +43,11 @@ async function browser() {
 
   console.log('\n🎯 WebSocket Scraper Ready!');
 
-  const results = await Promise.all([
+  // no page.close() — pages stay alive for reuse on next warm invocation
+  return Promise.all([
     triggerFetch(page1, API_URL_1),
     triggerFetch(page2, API_URL_3),
   ]);
-
-  // no page.close() — pages stay alive for reuse on next warm invocation
-  return results;
 }
 
-process.on('message', async (msg) => {
-  if (msg.cmd === 'scrape') {
-    try {
-      const data = await browser();
-      process.send({ type: 'done', data });
-    } catch (err) {
-      process.send({ type: 'error', error: err.message });
-    }
-  }
-});
+module.exports = { scrape };

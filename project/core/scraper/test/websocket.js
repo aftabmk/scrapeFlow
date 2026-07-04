@@ -108,31 +108,13 @@ class WSManager {
 
 module.exports = WSManager;
 
-// Run directly
+// Direct run
 if (require.main === module) {
   WSManager.start(8080);
 
   WSManager.broadcast({
-    type: 'ping'
+    type: 'ping',
   });
 
   console.log('all connections:', WSManager.list());
 }
-
-
-process.on('message', (msg) => {
-  if (msg.cmd === 'start') {
-    try {
-      const wss = WSManager.start(msg.port || 8080);
-      // wss.on('listening', ...) - only if 'start' doesn't already guarantee bound socket
-      process.send({ type: 'ready' });
-    } catch (err) {
-      process.send({ type: 'error', error: err.message });
-    }
-  }
-
-  if (msg.cmd === 'stop') {
-    WSManager.stop();
-    process.exit(0);
-  }
-});
