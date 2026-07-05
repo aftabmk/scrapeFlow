@@ -16,9 +16,7 @@ const browserProcess = async () => {
           break;
 
         case 'dequeue-response': {
-          const jobs = msg.jobs.map(raw =>
-            Object.assign(Object.create(Job.prototype), raw)
-          );
+          const jobs = msg.jobs.map(raw => Object.assign(Object.create(Job.prototype), raw));
 
           for (const job of jobs) {
             try {

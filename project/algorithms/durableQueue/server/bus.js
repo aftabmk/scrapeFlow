@@ -23,7 +23,8 @@ class Bus {
 
                 try {
                     resolve(JSON.parse(raw));
-                } catch (err) {
+                } 
+                catch (err) {
                     reject(err);
                 }
             };

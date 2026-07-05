@@ -9,7 +9,7 @@ const main = async() => {
     const bus = new Bus();
 
     const queue = new DurableQueue("email" , {
-        visibilityTimeout: 10000,
+        visibilityTimeout: 1,
         maxRetries: 3
     });
 
@@ -54,13 +54,13 @@ const main = async() => {
                 if (!job)
                     break;
 
-                console.log("processing", job.email);
+                console.log("processing", job);
 
                 const ok = await queue.ack(job.id);
-				// queue.ack takes time to reflect in db, 
-				// hence faster update might give old data
-
-                console.log("job acknowledged:", job.id, ok);
+                // test
+                // const ok = await queue.ack(4);
+                // giving fake id, keeps the job in the queue and will fetch over and over again
+                console.log("job acknowledged = job id : %d, status : %s", job.id, ok);
             }
 
             break;

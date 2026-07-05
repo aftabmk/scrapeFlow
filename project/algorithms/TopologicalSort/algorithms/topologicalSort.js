@@ -1,13 +1,14 @@
-// TopologicalSort.js 
+// TopologicalSort.js
+const { Graph } = require('../models/graph');
 
-class TopologicalSort {
+class TopologicalSort extends Graph {
+  constructor() { super(); }
 
-  static kahn(graph) {
-    const inDegree = new Map(graph.inDegree);  
+  kahn() {
+    const inDegree = this.inDegree; 
     const queue    = [];
     const result   = [];
 
-    // Seed queue with all zero-in-degree nodes
     for (const [node, deg] of inDegree) {
       if (deg === 0) queue.push(node);
     }
@@ -16,13 +17,13 @@ class TopologicalSort {
       const node = queue.shift();
       result.push(node);
 
-      for (const neighbor of graph.getNeighbors(node)) {
+      for (const neighbor of this.getNeighbors(node)) {
         inDegree.set(neighbor, inDegree.get(neighbor) - 1);
         if (inDegree.get(neighbor) === 0) queue.push(neighbor);
       }
     }
 
-    if (result.length !== graph.getNodes().length) {
+    if (result.length !== this.getNodes().length) {
       throw new Error('Cycle detected — topological sort not possible');
     }
 

@@ -1,7 +1,6 @@
 // supervisor/StartupManager.js
 const { fork } = require('child_process');
 const Logger = require('./Logger.js');
-const { Graph } = require('../../algorithms/TopologicalSort/models/graph.js');
 const { TopologicalSort } = require('../../algorithms/TopologicalSort/algorithms/topologicalSort.js');
 
 class StartupManager {
@@ -10,7 +9,7 @@ class StartupManager {
   }
 
   resolveStartOrder() {
-    const graph = new Graph();
+    const graph = new TopologicalSort();
 
     this.specs.forEach(spec => {
       graph.addNode?.(spec.name);
@@ -26,7 +25,7 @@ class StartupManager {
       });
     });
 
-    return TopologicalSort.kahn(graph);
+    return graph.kahn();
   }
 
   waitForReady(proc, name) {

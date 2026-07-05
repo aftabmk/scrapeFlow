@@ -41,6 +41,8 @@ class Queue extends LinkedQueue {
             queue: this.name,
             id
         });
+
+        // console.log(data);
     }
 }
 
