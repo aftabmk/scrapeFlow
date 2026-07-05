@@ -2,7 +2,7 @@
 const DurableQueue = require('../algorithms/durableQueue/algorithm/DurableQueue');
 
 const queue = new DurableQueue("Queue", {
-  visibilityTimeout: 10000,
+  visibilityTimeout: 10_000,
   maxRetries: 3
 });
 
