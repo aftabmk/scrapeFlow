@@ -1,20 +1,22 @@
-const { SocketBuilder, HTMLRequest, StorageBucket } = require('./class');
+const HTMLRequest = require('./utils/HTMLRequest');
+const SocketBuilder = require('./utils/socketBuilder');
+const StorageBucket = require('./utils/storageBucket');
 
 async function injectClass(page) {
   const 
-        HTMLRequestStr = HTMLRequest.toString(), 
+        HTMLRequestStr   = HTMLRequest.toString(), 
         SocketBuilderStr = SocketBuilder.toString(), 
         StorageBucketStr = StorageBucket.toString();
 
   await page.evaluateOnNewDocument((HTMLRequestStr, SocketBuilderStr,StorageBucketStr) => {
     const 
-          HTMLRequest = new Function(`return (${HTMLRequestStr})`)(), 
+          HTMLRequest   = new Function(`return (${HTMLRequestStr})`)(), 
           SocketBuilder = new Function(`return (${SocketBuilderStr})`)(),
           StorageBucket = new Function(`return (${StorageBucketStr})`)();
     // Inject the original functions into page context
     const initialiseOnLoad = () => {
+      window.HTMLRequest   = new HTMLRequest, 
       window.SocketBuilder = new SocketBuilder, 
-      window.HTMLRequest = new HTMLRequest, 
       window.StorageBucket = new StorageBucket;
     }
 

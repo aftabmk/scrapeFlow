@@ -1,4 +1,4 @@
-const WSManager = require('../websocket.js');
+const WSManager = require('../websocket');
 
 process.on('message', (msg) => {
   if (msg.cmd === 'start') {

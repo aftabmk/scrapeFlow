@@ -1,5 +1,5 @@
 const BrowserManager = require('./browserManager.js');
-const { inject, triggerFetch } = require('./scraper.js');
+const { inject, triggerFetch } = require('./injection');
 const { PAGE_URL_1, API_URL_1, PAGE_URL_3, API_URL_3 } = process.env;
 
 // url -> page (kept alive across warm invocations)

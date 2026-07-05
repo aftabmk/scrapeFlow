@@ -1,18 +1,5 @@
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 
-// --- Environment detection -------------------------------------------------
-//
-// Explicit override always wins. Set this in your Lambda's environment
-// config (not relying on AWS-provided vars) if auto-detection ever
-// misfires — e.g. because a bundler (webpack/esbuild/serverless-webpack)
-// statically inlined `process.env.AWS_LAMBDA_FUNCTION_NAME` at BUILD time
-// using the build machine's env (which won't have it), silently baking in
-// "local" mode forever regardless of the real runtime. Reading via bracket
-// notation and checking multiple signals makes that less likely, but an
-// explicit override removes the ambiguity entirely.
-//
-//   process.env.BROWSER_RUNTIME = 'lambda' | 'local'
-//
 function detectIsLambda() {
   const override = process.env['BROWSER_RUNTIME'];
   if (override === 'lambda') return true;
@@ -30,8 +17,6 @@ const USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
   '(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36';
 
-// Local/dev: block everything non-essential, including scripts — pages are
-// only used as a fetch/WebSocket sandbox, not rendered.
 const BLOCKED_RESOURCE_TYPES_LOCAL = new Set([
   'image',
   'stylesheet',
@@ -41,26 +26,12 @@ const BLOCKED_RESOURCE_TYPES_LOCAL = new Set([
   'other',
 ]);
 
-// Lambda: 'script' is intentionally NOT blocked — most exchange sites
-// (NSE/BSE) are JS-rendered SPAs and blocking script will break them.
 const BLOCKED_RESOURCE_TYPES_LAMBDA = new Set([
   'image',
   'stylesheet',
   'font',
   'media',
 ]);
-
-// --- Lazy, per-mode module + launch-option resolution -----------------------
-//
-// Requires happen inside these functions (not at module top-level) so:
-//   1) a wrong detection doesn't crash the whole module at import/cold-start
-//      time before you even get a chance to see a useful error,
-//   2) each mode only ever requires the packages it actually needs — the
-//      Lambda path never touches 'puppeteer' (full), the local path never
-//      touches '@sparticuz/chromium'.
-// Both are wrapped in try/catch with an error that names the missing
-// package and the mode that was selected, so a "not loading" failure is
-// diagnosable from the thrown message instead of a bare MODULE_NOT_FOUND.
 
 function buildLambdaExtra() {
   try {
@@ -154,8 +125,7 @@ class BrowserManager {
     }
 
     this.launching = (async () => {
-      const { puppeteerExtra, resolveLaunchOptions, isLambda } =
-        resolveEnvironment();
+      const { puppeteerExtra, resolveLaunchOptions, isLambda } = resolveEnvironment();
 
       const options = await resolveLaunchOptions();
       const browser = await puppeteerExtra.launch(options);

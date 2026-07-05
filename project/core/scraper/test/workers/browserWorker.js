@@ -1,4 +1,4 @@
-const { scrape } = require('../browser.js');
+const { scrape } = require('../scraper/browser/browser.js');
 
 process.on('message', async (msg) => {
   if (msg.cmd === 'scrape') {

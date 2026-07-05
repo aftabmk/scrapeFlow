@@ -28,8 +28,8 @@ class WSManager {
 
       ws.on('message', (message) => {
         try {
-          const data = JSON.parse(message);
-          console.log(`📥 [${pageId}] :`, data.type);
+          const { type, endpoint , data ,timestamp, pageUrl, pageId } = JSON.parse(message);
+          console.log(`📥 [${pageId}] :`, { meta : {type, timestamp} , page : {pageId, pageUrl}});
         } catch {
           console.log(`📥 [${pageId}]`, message.toString());
         }

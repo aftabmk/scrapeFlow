@@ -37,7 +37,7 @@ async function ensureWSChild() {
   }
 
   const { child } = await forkAndWait(
-    path.join(__dirname, 'workers', 'websocketWorker.js'),
+    path.join(__dirname, '..','workers', 'websocketWorker.js'),
     { cmd: 'start', port: 8080 },
     'ready'
   );
@@ -73,7 +73,7 @@ async function ensureBrowserScrape() {
   }
 
   const { child, data } = await forkAndWait(
-    path.join(__dirname, 'workers', 'browserWorker.js'),
+    path.join(__dirname,'..', 'workers', 'browserWorker.js'),
     { cmd: 'scrape' },
     'done'
   );
@@ -84,7 +84,7 @@ async function ensureBrowserScrape() {
     cache.set('browserChild', null);
   });
 
-  return data;
+  // return data;
 }
 
 module.exports = { ensureWSChild, ensureBrowserScrape };
