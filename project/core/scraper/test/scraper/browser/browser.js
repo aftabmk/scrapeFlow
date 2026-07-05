@@ -13,6 +13,7 @@ async function getPage(url) {
   }
 
   const page = await BrowserManager.createPage();
+  await inject(page, 8080, url);
   pageCache.set(url, page);
   return page;
 }
@@ -28,9 +29,6 @@ async function scrape() {
 
   const page1 = await getPage(PAGE_URL_1);
   const page2 = await getPage(PAGE_URL_3);
-
-  if (isPage1New) await inject(page1, 8080, 'page1');
-  if (isPage3New) await inject(page2, 8080, 'page2');
 
   await Promise.all([
     isPage1New
