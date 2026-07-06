@@ -1,0 +1,15 @@
+# Clone the repository (cmd) have to do on every new tab
+git clone https://github.com
+cd emsdk
+
+:: 1. Force the toolchain activation state
+emsdk.bat activate latest
+
+:: 2. Load the batch variable environment paths
+emsdk_env.bat
+
+:: 3. Test the execution path directly
+emcc --version
+
+#command
+emcc math_engine.cpp -o ./math_engine.js -s EXPORTED_FUNCTIONS="[\"_addNumbers\"]" -s EXPORTED_RUNTIME_METHODS="[\"ccall\",\"cwrap\"]" -s ENVIRONMENT="node" -O3
