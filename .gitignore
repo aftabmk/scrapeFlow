@@ -3,5 +3,5 @@
 *package-lock.json
 *.json
 *.db*
-*emsdk/*
-*build/*
+*emsdk
+*build
