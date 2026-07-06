@@ -12,4 +12,4 @@ emsdk_env.bat
 emcc --version
 
 #command
-emcc math_engine.cpp -o ./math_engine.js -s EXPORTED_FUNCTIONS="[\"_addNumbers\"]" -s EXPORTED_RUNTIME_METHODS="[\"ccall\",\"cwrap\"]" -s ENVIRONMENT="node" -O3
+emcc math_engine.cpp -o ./build/math_engine.js -s EXPORTED_FUNCTIONS="["_addNumbersAndReturnString","UTF8ToString"]" -s EXPORTED_RUNTIME_METHODS="[ccall,cwrap]" -s ENVIRONMENT="node" -O3  
