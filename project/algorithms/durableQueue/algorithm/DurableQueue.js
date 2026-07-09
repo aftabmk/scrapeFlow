@@ -63,6 +63,18 @@ class DurableQueue extends RecoverableQueue {
         return job;
     }
 
+    async dequeueBatch(batchSize = 1) {
+        const jobs = [];
+
+        for (let i = 0; i < batchSize; i++) {
+            const job = await this.dequeue();
+            if (!job) break; // queue drained, stop early
+            jobs.push(job);
+        }
+
+        return jobs;
+    }
+
     async ack(id) {
 
         if (!this.inFlight.has(id))

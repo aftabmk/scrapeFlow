@@ -6,10 +6,11 @@ const Parent = require('./parent');
 
 const app = new Parent({ name: 'parent' });
 
-app.registerChild('calculator', path.join(__dirname, 'child.js'));
+app.registerChild('tracer', path.join(__dirname,'children','tracer.js'));
+app.registerChild('calculator', path.join(__dirname,'children','calculator.js'));
 
-const traceId = crypto.randomUUID();
+const job = { id: crypto.randomUUID(), op: 'add', args: [2, 3] };
 
 setTimeout(() => {
-  app.routeJobTo('calculator', traceId, { op: 'add', args: [10, 3] });
+  app.routeJobTo('calculator', job);
 }, 300);

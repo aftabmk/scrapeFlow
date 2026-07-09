@@ -1,91 +1,80 @@
 'use strict';
 
 const EventEmitter = require('events');
-
-class DurableQueue {
-  constructor() {
-    this._items = [];
-  }
-  enqueue(item) {
-    this._items.push(item);
-  }
-  dequeue(n = 1) {
-    return this._items.splice(0, n);
-  }
-  get size() {
-    return this._items.length;
-  }
-}
+const DurableQueue = require('../../algorithms/durableQueue');
 
 class QueueEmitter extends EventEmitter {
   constructor(workerHandle, opts = {}) {
     super();
+
     this.worker = workerHandle;
-    this.queue = new DurableQueue();
-    this.concurrency = opts.concurrency || 1;
-    this.inFlight = 0;
+
+    this.queue = new DurableQueue(opts.name || 'queue', {
+      visibilityTimeout: opts.visibilityTimeout ?? 1,
+      maxRetries: opts.maxRetries ?? 3,
+    });
+
     this.running = false;
 
-    this.worker.on('message', (msg) => this._onWorkerMessage(msg));
+    this.worker.on('message', (msg) => {
+      this._onWorkerMessage(msg).catch(err => this.emit('error', err));
+    });
 
-    this.on('task', () => this._pump());
+    this.on('task', () => {
+      this._pump().catch(err => this.emit('error', err));
+    });
   }
 
   start() {
     this.running = true;
-    this._pump();
+    this._pump().catch(err => this.emit('error', err));
   }
 
   stop() {
     this.running = false;
   }
 
-  enqueue(job, meta = {}) {
-    this.queue.enqueue({ job, meta, traceId: meta.traceId, enteredAt: Date.now() });
+  async enqueue(job) {
+    if (!job?.id) {
+      throw new Error('QueueEmitter.enqueue: job must have an id');
+    }
+
+    const jobObj = { id : job.id, job, enteredAt : Date.now()};
+
+    await this.queue.enqueue(job);
+
     this.emit('task');
   }
 
-  _pump() {
+  async _pump() {
     if (!this.running) return;
 
-    const freeSlots = this.concurrency - this.inFlight;
-    if (freeSlots <= 0 || this.queue.size === 0) return;
+    while (this.running) {
+      const batch = await this.queue.dequeueBatch(1);
 
-    const batch = this.queue.dequeue(freeSlots);
-    for (const item of batch) {
-      this.inFlight += 1;
-      this.worker.postMessage({ traceId: item.traceId, job: item.job });
-      this._pending = this._pending || new Map();
-      this._pending.set(item.traceId, item);
+      if (!batch.length) {
+        break;
+      }
+
+      this.worker.postMessage({
+        job: batch[0].job,
+      });
     }
   }
 
-  _onWorkerMessage(msg) {
-    this.inFlight = Math.max(0, this.inFlight - 1);
-
-    const pendingItem = this._pending && this._pending.get(msg.trace?.traceId);
-    this._pending && this._pending.delete(msg.trace?.traceId);
-
-    this._ack(msg, pendingItem);
-    this._pump();
-  }
-
-  _ack(msg, pendingItem) {
-    const enteredAt = pendingItem ? pendingItem.enteredAt : undefined;
+  async _onWorkerMessage(msg) {
+    await this.queue.ack(msg.job.id);
 
     this.emit('result', {
       ok: msg.ok,
       job: msg.job,
       result: msg.result,
       error: msg.error,
-      trace: {
-        ...msg.trace,
-        enteredAt,
-      },
+      trace: msg.trace,
     });
 
     this.emit('task');
   }
 }
 
-module.exports = { QueueEmitter, DurableQueue };
+module.exports = { QueueEmitter };

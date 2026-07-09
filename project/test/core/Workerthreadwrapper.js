@@ -2,11 +2,12 @@
 
 const { parentPort, workerData } = require('worker_threads');
 
+
 const HandlerClass = require(workerData.handlerPath);
 const handler = new HandlerClass(workerData.handlerOptions || {});
 
 parentPort.on('message', async (msg) => {
-  const { traceId, job } = msg;
+  const { job } = msg;
   const startedAt = Date.now();
 
   try {
@@ -18,14 +19,15 @@ parentPort.on('message', async (msg) => {
       job,
       result,
       trace: {
-        traceId,
+        jobId: job.id,
         event: 'worker.complete',
         startedAt,
         finishedAt,
         durationMs: finishedAt - startedAt,
       },
     });
-  } catch (err) {
+  } 
+  catch (err) {
     const finishedAt = Date.now();
 
     parentPort.postMessage({
@@ -33,7 +35,7 @@ parentPort.on('message', async (msg) => {
       job,
       error: { message: err.message, stack: err.stack },
       trace: {
-        traceId,
+        jobId: job.id,
         event: 'worker.error',
         startedAt,
         finishedAt,

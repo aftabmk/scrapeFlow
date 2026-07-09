@@ -19,21 +19,29 @@ class ParentProcess extends ProcessBase {
     return childHandle;
   }
 
-  routeJobTo(childName, traceId, job) {
+  routeJobTo(childName, job) {
     const childHandle = this.children.get(childName);
     if (!childHandle) {
       throw new Error(`No such child: ${childName}`);
     }
-    childHandle.send({ traceId, job });
+    if (!job || !job.id) {
+      throw new Error('routeJobTo: job must have an id');
+    }
+    childHandle.send({ type: 'job:process', job });
   }
 
   onMessage(msg, fromChildName) {
-    if (msg.trace) {
-      this.tracer.append(fromChildName || msg.from, msg.trace);
+    if (!msg || typeof msg.type !== 'string') return;
+
+    if (msg.type === 'job:forward') {
+      // same job.id preserved across the hop, new payload as args
+      const nextJob = { ...msg.job, args: [msg.data] };
+      this.routeJobTo(msg.to, nextJob);
+      return;
     }
 
-    if (msg.type === 'result') {
-      return;
+    if (msg.type === 'job:result') {
+      return; // subclass handles final results
     }
   }
 

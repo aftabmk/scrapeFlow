@@ -1,4 +1,3 @@
-const Bus = require("./server/bus.js");
 const DurableQueue = require("./algorithm/DurableQueue.js");
 
 // const recover = require("./models/recover.js");
@@ -6,7 +5,6 @@ const DurableQueue = require("./algorithm/DurableQueue.js");
 const [,,mode] = process.argv;
 
 const main = async() => {
-    const bus = new Bus();
 
     const queue = new DurableQueue("email" , {
         visibilityTimeout: 1,

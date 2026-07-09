@@ -19,11 +19,11 @@ class Tracer {
     return this.store.get(childName) || [];
   }
 
-  getByTraceId(traceId) {
+  getByJobId(jobId) {
     const results = [];
     for (const [childName, entries] of this.store.entries()) {
       for (const entry of entries) {
-        if (entry.traceId === traceId) {
+        if (entry.jobId === jobId) {
           results.push({ childName, ...entry });
         }
       }
