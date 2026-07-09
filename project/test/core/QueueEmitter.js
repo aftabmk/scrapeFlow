@@ -57,7 +57,7 @@ class QueueEmitter extends EventEmitter {
       }
 
       this.worker.postMessage({
-        job: batch[0].job,
+        job: batch[0],
       });
     }
   }
