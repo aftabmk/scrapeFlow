@@ -96,15 +96,12 @@ class DurableQueue {
         }, this.sweepInterval);
     }
 
-    // === Public API ===
-
     async enqueue(job) {
         if (this._recoverPromise) {
             await this._recoverPromise;
             this._recoverPromise = null;
         }
 
-        // ✅ job.id must exist (exchange-contract)
         if (!job.id) {
             throw new Error(`Job must have an id property (exchange-contract)`);
         }
@@ -199,15 +196,11 @@ class DurableQueue {
         return true;
     }
 
-    // === Recovery ===
-
-    // queue/DurableQueue.js
     async recover() {
         try {
             if (this.commWorker && typeof this.commWorker.sendRequest === 'function') {
-                // recove all un-acked message inside db if presend!
                 const result = await this.commWorker.sendRequest('recover');
-
+                
                 if (result && result.rows) {
                     this.queue.clear();
                     this.inFlight.clear();
@@ -235,8 +228,6 @@ class DurableQueue {
             return 0;
         }
     }
-
-    // === Stats ===
 
     getStats() {
         return {

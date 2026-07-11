@@ -1,17 +1,18 @@
 // workers/sqlite-comm-worker.js
+// ✅ ONLY handles IPC communication - NO SQLite queries
 const { EventEmitter } = require('events');
 
 class SQLiteCommWorker extends EventEmitter {
     constructor(options = {}) {
         super();
-
+        
         this.workerId = options.workerId || `sqlite_comm_${process.pid}`;
         this.writeQueue = options.writeQueue;
         this.queueName = options.queueName || 'default_queue';
         this.pollInterval = options.pollInterval || 100;
         this.batchSize = options.batchSize || 50;
         this.isRunning = true;
-
+        
         this.pendingRequests = new Map();
         this.stats = {
             batchesProcessed: 0,
@@ -27,7 +28,6 @@ class SQLiteCommWorker extends EventEmitter {
 
     _setupIPCListener() {
         process.on('message', (message) => {
-            // ✅ Response contains jobId (exchange-contract)
             if (message && message.jobId) {
                 this._handleResponse(message);
             }
@@ -37,7 +37,6 @@ class SQLiteCommWorker extends EventEmitter {
     _handleResponse(response) {
         const { jobId, error, ...data } = response;
 
-        // ✅ jobId is exchange-contract
         if (this.pendingRequests.has(jobId)) {
             const { resolve, reject, timeout } = this.pendingRequests.get(jobId);
             clearTimeout(timeout);
@@ -51,25 +50,18 @@ class SQLiteCommWorker extends EventEmitter {
         }
     }
 
-    // === Public API ===
+    // === Send Request to SQLite Server ===
 
     async sendRequest(op, data = {}) {
         return this._sendRequest(op, data);
     }
 
-    // === Private Request ===
-
-    // workers/sqlite-comm-worker.js
     _sendRequest(op, data = {}) {
         return new Promise((resolve, reject) => {
-            // ✅ Use queue name as tracking ID for recover
             let trackId;
             if (op === 'recover') {
-                // when app is restarted retrive all un-acked data from queue
-                // Use queue name - this is consistent and predictable
                 trackId = `recover_${this.queueName}`;
             } else {
-                // ✅ For job operations, use jobId (exchange-contract)
                 trackId = data.jobId;
             }
 
@@ -78,31 +70,30 @@ class SQLiteCommWorker extends EventEmitter {
                 return;
             }
 
+            let timeoutMs = 5000;
+            if (op === 'recover') {
+                timeoutMs = 15000;
+            } else if (op === 'append' && data.batch) {
+                timeoutMs = 10000;
+            }
+
             const timeout = setTimeout(() => {
                 this.pendingRequests.delete(trackId);
                 reject(new Error(`Request timeout: ${op} (${trackId})`));
-                // 100 ms works for local, production 500 will be preferable
-            }, 100);
+            }, timeoutMs);
 
             this.pendingRequests.set(trackId, { resolve, reject, timeout });
 
-            // ✅ Build message
             const message = {
                 type: 'SQLITE_REQUEST',
                 data: {
                     op,
                     queue: this.queueName,
                     sourcePid: process.pid,
+                    jobId: trackId,
                     ...data
                 }
             };
-
-            // ✅ For recover: use queue name as jobId for tracking
-            if (op === 'recover') {
-                message.data.jobId = trackId;  // ✅ recover_browser_queue (consistent)
-            } else {
-                message.data.jobId = trackId;  // ✅ exchange-contract
-            }
 
             if (data.payload) {
                 message.data.payload = data.payload;
@@ -111,12 +102,11 @@ class SQLiteCommWorker extends EventEmitter {
                 message.data.retries = data.retries;
             }
 
-            console.log(`[SQLiteCommWorker] 📨 Sending ${op} with jobId: ${trackId}`);
             process.send(message);
         });
     }
 
-    // === Processing Loop ===
+    // === Processing Loop (Batch Operations) ===
 
     async _startProcessing() {
         while (this.isRunning) {
@@ -136,7 +126,7 @@ class SQLiteCommWorker extends EventEmitter {
         }
 
         const batch = this.writeQueue.dequeueBatch(this.batchSize);
-
+        
         if (batch.length === 0) {
             await this._sleep(this.pollInterval);
             return;
@@ -149,7 +139,7 @@ class SQLiteCommWorker extends EventEmitter {
         } catch (error) {
             console.error(`[SQLiteCommWorker] Batch failed:`, error.message);
             this.stats.failedOperations += batch.length;
-
+            
             for (const op of batch) {
                 this.writeQueue.enqueue(op);
             }
@@ -196,11 +186,10 @@ class SQLiteCommWorker extends EventEmitter {
         }
     }
 
-    // === Operation Processors ===
+    // === Operation Senders (Send to SQLite Server) ===
 
     async _processAppends(ops) {
         for (const op of ops) {
-            // ✅ op.jobId is exchange-contract
             await this._sendRequest('append', {
                 jobId: op.jobId,
                 payload: op.payload
@@ -241,6 +230,8 @@ class SQLiteCommWorker extends EventEmitter {
             });
         }
     }
+
+    // === Utility ===
 
     _sleep(ms) {
         return new Promise(resolve => setTimeout(resolve, ms));

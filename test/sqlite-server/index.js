@@ -2,16 +2,43 @@
 const SQLiteServer = require('./server');
 
 if (require.main === module) {
-    console.log('[SQLiteServer] 🚀 Starting...');
+    console.log('[SQLiteServer] 🚀 Starting SQLite Server process...');
+    console.log(`[SQLiteServer] PID: ${process.pid}`);
 
     const server = new SQLiteServer({
-        dbPath: process.env.DB_PATH || './data/queue.db'
+        dbPath: process.env.DB_PATH || './data/queue.db',
+        writeWorkers: parseInt(process.env.WRITE_WORKERS) || 1,
+        readWorkers: parseInt(process.env.READ_WORKERS) || 3
     });
 
-    process.on('SIGINT', () => server.shutdown());
-    process.on('SIGTERM', () => server.shutdown());
+    server.on('ready', (info) => {
+        console.log('[SQLiteServer] ✅ Ready signal sent to parent');
+        if (process.send) {
+            process.send({ type: 'SQLITE_READY', ...info });
+        }
+    });
 
-    console.log('[SQLiteServer] ✅ Ready');
+    process.on('message', async (message) => {
+        if (message && message.type === 'SHUTDOWN') {
+            console.log('[SQLiteServer] Received shutdown command');
+            await server.shutdown();
+        }
+    });
+
+    process.on('SIGINT', async () => {
+        console.log('[SQLiteServer] SIGINT received');
+        await server.shutdown();
+    });
+
+    process.on('SIGTERM', async () => {
+        console.log('[SQLiteServer] SIGTERM received');
+        await server.shutdown();
+    });
+
+    process.on('uncaughtException', (err) => {
+        console.error('[SQLiteServer] Uncaught exception:', err);
+        process.exit(1);
+    });
 }
 
 module.exports = SQLiteServer;
