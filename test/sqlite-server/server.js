@@ -1,10 +1,9 @@
 // sqlite-server/server.js
-const { DatabaseSync } = require('node:sqlite');
-const path = require('path');
-const fs = require('fs');
 const { EventEmitter } = require('events');
-const NormalQueue = require('../queue/normal-queue');
-const SQLQueries = require('./sql-queries');
+const SQLiteManager = require('./components/sqlite-manager');
+const RequestRouter = require('./components/request-router');
+const ResponseSender = require('./components/response-sender');
+const IPCHandler = require('./components/ipc-handler');
 const SQLiteWriteWorker = require('./workers/write-worker');
 const SQLiteReadWorker = require('./workers/read-worker');
 
@@ -14,91 +13,99 @@ class SQLiteServer extends EventEmitter {
         this.dbPath = options.dbPath || './data/queue.db';
         this.writeWorkers = options.writeWorkers || 1;
         this.readWorkers = options.readWorkers || 3;
-        this.tables = new Map();
         this.isRunning = true;
 
-        // ✅ Normal queues for request routing
-        this.writeQueue = new NormalQueue({ name: 'write_queue', maxSize: 10000 });
-        this.readQueue = new NormalQueue({ name: 'read_queue', maxSize: 10000 });
-
-        // ✅ SQL Queries instance
-        this.queries = null;
+        // ✅ Initialize components
+        this.sqliteManager = new SQLiteManager({ dbPath: this.dbPath });
+        this.requestRouter = new RequestRouter();
+        this.responseSender = new ResponseSender({
+            sendFn: (jobId, data, targetPid) => this._sendResponse(jobId, data, targetPid)
+        });
+        this.ipcHandler = new IPCHandler({
+            requestRouter: this.requestRouter,
+            responseSender: this.responseSender,
+            sqliteManager: this.sqliteManager
+        });
 
         // ✅ Workers
         this.writeWorker = null;
         this.readWorkersList = [];
 
-        this._initDB();
-        this._setupIPCListener();
-        this._initWorkers();
+        console.log('[SQLiteServer] Constructor complete');
     }
 
-    _initDB() {
-        const dir = path.dirname(this.dbPath);
-        if (!fs.existsSync(dir)) {
-            fs.mkdirSync(dir, { recursive: true });
+    /**
+     * Start the server
+     */
+    async start() {
+        console.log('[SQLiteServer] Starting server...');
+
+        try {
+            // 1. Initialize database
+            this.sqliteManager.initialize();
+
+            // 2. Setup IPC handler
+            this.ipcHandler.start();
+
+            // 3. Initialize workers
+            this._initWorkers();
+
+            // 4. Signal ready
+            this.emit('ready', {
+                writeWorkers: this.writeWorkers,
+                readWorkers: this.readWorkers,
+                dbPath: this.dbPath,
+                pid: process.pid
+            });
+
+            console.log('[SQLiteServer] ✅ Server started successfully');
+            return this;
+
+        } catch (error) {
+            console.error('[SQLiteServer] ❌ Server start failed:', error);
+            throw error;
         }
-
-        this.db = new DatabaseSync(this.dbPath);
-
-        this.db.exec('PRAGMA journal_mode=WAL');
-        this.db.exec('PRAGMA synchronous=NORMAL');
-        this.db.exec('PRAGMA busy_timeout=5000');
-
-        // ✅ Create SQL Queries instance
-        this.queries = new SQLQueries(this.db);
-
-        // ✅ Create queue log table
-        this.db.exec(`
-            CREATE TABLE IF NOT EXISTS queue_log (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                queue_name TEXT NOT NULL,
-                op TEXT NOT NULL,
-                job_id TEXT NOT NULL,
-                payload TEXT,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-        `);
-
-        // ✅ Dead letter table
-        this.db.exec(`
-            CREATE TABLE IF NOT EXISTS dead_letter (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                queue_name TEXT NOT NULL,
-                job_id TEXT NOT NULL,
-                payload TEXT,
-                retries INTEGER DEFAULT 0,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-        `);
-
-        // ✅ Queue state tracking
-        this.db.exec(`
-            CREATE TABLE IF NOT EXISTS queue_state (
-                queue_name TEXT PRIMARY KEY,
-                pending_count INTEGER DEFAULT 0,
-                in_flight_count INTEGER DEFAULT 0,
-                dead_letter_count INTEGER DEFAULT 0,
-                last_updated DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-        `);
-
-        console.log('[SQLiteServer] ✅ Database initialized');
     }
 
-    _setupIPCListener() {
-        process.on('message', async (message) => {
-            if (!message) return;
+    /**
+     * Initialize workers
+     */
+    _initWorkers() {
+        console.log('[SQLiteServer] Initializing workers...');
 
-            try {
-                const result = await this._handleRequest(message);
-                this._sendResponse(message.jobId, result, message.sourcePid);
-            } catch (error) {
-                this._sendResponse(message.jobId, { error: error.message }, message.sourcePid);
+        const queries = this.sqliteManager.getQueries();
+        const db = this.sqliteManager.getDB();
+
+        // Create Write Worker (Single)
+        this.writeWorker = new SQLiteWriteWorker({
+            workerId: 'write_worker_1',
+            writeQueue: this.requestRouter.getWriteQueue(),
+            queries: queries,
+            sendResponse: (jobId, data, targetPid) => {
+                this.responseSender.send(jobId, data, targetPid);
             }
         });
+
+        // Create Read Workers (Multiple)
+        for (let i = 0; i < this.readWorkers; i++) {
+            const worker = new SQLiteReadWorker({
+                workerId: `read_worker_${i + 1}`,
+                readQueue: this.requestRouter.getReadQueue(),
+                queries: queries,
+                sendResponse: (jobId, data, targetPid) => {
+                    this.responseSender.send(jobId, data, targetPid);
+                }
+            });
+
+            this.readWorkersList.push(worker);
+        }
+
+        console.log(`[SQLiteServer] ✅ Workers initialized: 1 write + ${this.readWorkers} read`);
     }
 
+    /**
+     * Send response via IPC
+     */
     _sendResponse(jobId, data, targetPid) {
         if (process.send) {
             process.send({
@@ -110,81 +117,14 @@ class SQLiteServer extends EventEmitter {
         }
     }
 
-    async _handleRequest(request) {
-        const { op, queue, jobId, payload, sourcePid } = request;
-
-        // ✅ Ensure queue table exists
-        this.queries.getOrCreateTable(queue);
-
-        const isWrite = ['append', 'deliver', 'ack', 'requeue', 'deadletter'].includes(op);
-        const isRead = ['dequeue', 'dequeue_multiple', 'recover', 'stats'].includes(op);
-
-        if (isWrite) {
-            await this.writeQueue.enqueue({
-                op,
-                queue,
-                jobId,
-                payload,
-                sourcePid,
-                requestId: request.jobId || jobId
-            });
-            return { queued: true };
-        } else if (isRead) {
-            await this.readQueue.enqueue({
-                op,
-                queue,
-                jobId,
-                payload,
-                sourcePid,
-                requestId: request.jobId || jobId
-            });
-            return { queued: true };
-        } else {
-            throw new Error(`Unknown operation: ${op}`);
-        }
-    }
-
-    _initWorkers() {
-        console.log('[SQLiteServer] Initializing workers...');
-
-        // ✅ Create Write Worker (Single)
-        this.writeWorker = new SQLiteWriteWorker({
-            workerId: 'write_worker_1',
-            writeQueue: this.writeQueue,
-            queries: this.queries,  // ✅ Pass SQL queries
-            sendResponse: (jobId, data, targetPid) => {
-                this._sendResponse(jobId, data, targetPid);
-            }
-        });
-
-        // ✅ Create Read Workers (Multiple)
-        for (let i = 0; i < this.readWorkers; i++) {
-            const worker = new SQLiteReadWorker({
-                workerId: `read_worker_${i + 1}`,
-                readQueue: this.readQueue,
-                queries: this.queries,  // ✅ Pass SQL queries
-                sendResponse: (jobId, data, targetPid) => {
-                    this._sendResponse(jobId, data, targetPid);
-                }
-            });
-            
-            this.readWorkersList.push(worker);
-        }
-
-        console.log(`[SQLiteServer] ✅ Workers initialized: 1 write + ${this.readWorkers} read`);
-        
-        this.emit('ready', {
-            writeWorkers: this.writeWorkers,
-            readWorkers: this.readWorkers,
-            dbPath: this.dbPath,
-            pid: process.pid
-        });
-    }
-
+    /**
+     * Shutdown
+     */
     async shutdown() {
         console.log('[SQLiteServer] Shutting down...');
         this.isRunning = false;
 
+        // Shutdown workers
         if (this.writeWorker) {
             this.writeWorker.shutdown();
         }
@@ -193,9 +133,11 @@ class SQLiteServer extends EventEmitter {
             worker.shutdown();
         }
 
-        if (this.db) {
-            this.db.close();
-        }
+        // Shutdown components
+        this.ipcHandler.shutdown();
+        this.requestRouter.shutdown();
+        this.responseSender.shutdown();
+        this.sqliteManager.close();
 
         console.log('[SQLiteServer] ✅ Shutdown complete');
         process.exit(0);

@@ -1,5 +1,4 @@
 // sqlite-server/workers/write-worker.js
-// ✅ Receives requests, calls sql-queries.js functions
 const { EventEmitter } = require('events');
 
 class SQLiteWriteWorker extends EventEmitter {
@@ -7,7 +6,7 @@ class SQLiteWriteWorker extends EventEmitter {
         super();
         this.workerId = options.workerId || 'write_worker_1';
         this.writeQueue = options.writeQueue;
-        this.queries = options.queries;  // ✅ SQL queries instance
+        this.queries = options.queries;
         this.sendResponse = options.sendResponse;
         this.isRunning = true;
         this.batchSize = 10;
@@ -58,7 +57,6 @@ class SQLiteWriteWorker extends EventEmitter {
         try {
             let result;
 
-            // ✅ Map operation names to sql-queries.js functions
             const operationMap = {
                 'append': () => this.queries.append(queue, jobId, payload),
                 'deliver': () => this.queries.deliver(queue, jobId),

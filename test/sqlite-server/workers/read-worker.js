@@ -1,5 +1,4 @@
 // sqlite-server/workers/read-worker.js
-// ✅ Receives requests, calls sql-queries.js functions
 const { EventEmitter } = require('events');
 
 class SQLiteReadWorker extends EventEmitter {
@@ -7,7 +6,7 @@ class SQLiteReadWorker extends EventEmitter {
         super();
         this.workerId = options.workerId || 'read_worker_1';
         this.readQueue = options.readQueue;
-        this.queries = options.queries;  // ✅ SQL queries instance
+        this.queries = options.queries;
         this.sendResponse = options.sendResponse;
         this.isRunning = true;
 
@@ -39,7 +38,6 @@ class SQLiteReadWorker extends EventEmitter {
         try {
             let result;
 
-            // ✅ Map operation names to sql-queries.js functions
             const operationMap = {
                 'dequeue': () => this.queries.dequeue(queue, jobId),
                 'dequeue_multiple': () => this.queries.dequeueMultiple(queue, jobId, payload?.count || 1),

@@ -13,8 +13,21 @@ class BaseChildProcess extends EventEmitter {
         this.processType = options.processType || args.processType || 'generic';
         this.queueName = options.queueName || args.queueName || `${this.processType}_queue`;
         this.processingWorkers = options.processingWorkers || parseInt(args.processingWorkers) || 2;
-        this.dbPath = options.dbPath || './data/queue.db';
+
+        // ✅ Use sqliteIndex for unique table names if needed
+        this.sqliteIndex = options.sqliteIndex || parseInt(args.sqliteIndex) || 0;
+        this.dbPath = options.dbPath || args.dbPath || './data/queue.db';
+
         this.isRunning = true;
+
+        // ✅ Use sqliteIndex in queue name for uniqueness (optional)
+        // This ensures each process has a unique table name
+        const uniqueQueueName = this.sqliteIndex > 0
+            ? `${this.queueName}_${this.sqliteIndex}`
+            : this.queueName;
+
+        console.log(`[${this.processType}] SQLite Index: ${this.sqliteIndex}`);
+        console.log(`[${this.processType}] Queue Name: ${uniqueQueueName}`);
 
         this.writeQueue = new WriteQueue();
 
@@ -98,7 +111,7 @@ class BaseChildProcess extends EventEmitter {
                 jobId,
                 timestamp: Date.now()
             });
-            
+
             console.log(`[${this.processType}] 📝 Job ${jobId} enqueued`);
         } catch (error) {
             console.error(`[${this.processType}] ❌ Failed to enqueue job:`, error.message);
@@ -122,14 +135,15 @@ class BaseChildProcess extends EventEmitter {
         }
     }
 
+    // looping for a while
     async _startWorker(workerId) {
         console.log(`[${this.processType}] 👷 Worker ${workerId} started`);
         let emptyCount = 0;
-        
+
         while (this.isRunning) {
             try {
                 const job = await this.queue.dequeue();
-                
+
                 if (!job) {
                     emptyCount++;
                     // ✅ Log every 50 empty checks (25 seconds at 500ms)
@@ -139,47 +153,47 @@ class BaseChildProcess extends EventEmitter {
                     await this._sleep(500);
                     continue;
                 }
-                
+
                 // ✅ Reset empty counter
                 emptyCount = 0;
-                
+
                 console.log(`[${this.processType}] 🔄 Worker ${workerId} processing ${job.id}`);
-                
+
                 try {
                     const result = await this._processJob(job);
-                    
+
                     await this.queue.ack(job.id);
                     this.stats.jobsProcessed++;
-                    
+
                     console.log(`[${this.processType}] ✅ Worker ${workerId} completed ${job.id}`);
-                    
+
                     this._sendMessage({
                         type: 'JOB_COMPLETE',
                         jobId: job.id,
                         result,
                         timestamp: Date.now()
                     });
-                    
+
                 } catch (error) {
                     this.stats.jobsFailed++;
                     console.error(`[${this.processType}] ❌ Worker ${workerId} failed ${job.id}:`, error.message);
-                    
+
                     this._sendMessage({
                         type: 'JOB_FAILED',
                         jobId: job.id,
                         error: error.message,
                         timestamp: Date.now()
                     });
-                    
+
                     // ✅ Let the sweeper handle requeue
                 }
-                
+
             } catch (error) {
                 console.error(`[${this.processType}] Worker ${workerId} loop error:`, error);
                 await this._sleep(1000);
             }
         }
-        
+
         console.log(`[${this.processType}] 👷 Worker ${workerId} stopped`);
     }
 

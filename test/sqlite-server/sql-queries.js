@@ -1,7 +1,4 @@
 // sqlite-server/sql-queries.js
-// ✅ ALL SQLite query functions defined here
-// Workers call these functions - NO SQL in workers
-
 class SQLQueries {
     constructor(db) {
         this.db = db;

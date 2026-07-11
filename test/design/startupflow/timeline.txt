@@ -1,0 +1,69 @@
+┌─────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                              TIMELINE COMPARISON                                                │
+├─────────────────────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                                 │
+│  BEFORE (Sequential):                                                                          │
+│  ────────────────────                                                                          │
+│                                                                                                 │
+│  Time 0ms    500ms    1000ms    1500ms    2000ms    2500ms    3000ms                            │
+│  │            │         │         │         │         │         │                              │
+│  ├─SQLite─────┤         │         │         │         │         │                              │
+│  │  Startup   │         │         │         │         │         │                              │
+│  │  (400ms)   │         │         │         │         │         │                              │
+│  │            │         │         │         │         │         │                              │
+│  │            ├─Child1──┤         │         │         │         │                              │
+│  │            │ Recover │         │         │         │         │                              │
+│  │            │ (200ms) │         │         │         │         │                              │
+│  │            │         │         │         │         │         │                              │
+│  │            │         ├─Child2──┤         │         │         │                              │
+│  │            │         │ Recover │         │         │         │                              │
+│  │            │         │ (200ms) │         │         │         │                              │
+│  │            │         │         │         │         │         │                              │
+│  │            │         │         ├─Child3──┤         │         │                              │
+│  │            │         │         │ Recover │         │         │                              │
+│  │            │         │         │ (200ms) │         │         │                              │
+│  │            │         │         │         │         │         │                              │
+│  │            │         │         │         ├─Child4──┤         │                              │
+│  │            │         │         │         │ Recover │         │                              │
+│  │            │         │         │         │ (200ms) │         │                              │
+│  │            │         │         │         │         │         │                              │
+│  │            │         │         │         │         ├─Ready───┤                              │
+│  │            │         │         │         │         │ All     │                              │
+│  │            │         │         │         │         │ (100ms) │                              │
+│  │            │         │         │         │         │         │                              │
+│  │  TOTAL: ~2700ms                                                                             │
+│                                                                                                 │
+│                                                                                                 │
+│  AFTER (Parallel):                                                                             │
+│  ───────────────────                                                                           │
+│                                                                                                 │
+│  Time 0ms    50ms     100ms    150ms    200ms    250ms                                         │
+│  │            │         │         │         │         │                                        │
+│  ├─SQLite─────┤         │         │         │         │                                        │
+│  │  Startup   │         │         │         │         │                                        │
+│  │  (async)   │         │         │         │         │                                        │
+│  │            │         │         │         │         │                                        │
+│  │            ├─All Children Spawned (Parallel, 0ms wait)                                     │
+│  │            │                                                                                │
+│  │            │  Child1: ALIVE (0ms)                                                          │
+│  │            │  Child2: ALIVE (0ms)                                                          │
+│  │            │  Child3: ALIVE (0ms)                                                          │
+│  │            │  Child4: ALIVE (0ms)                                                          │
+│  │            │                                                                                │
+│  │            │  ←─── SQLite creates ALL tables (50ms) ───→                                  │
+│  │            │                                                                                │
+│  │            │  ALL_TABLES_CREATED (50ms)                                                    │
+│  │            │  SERVER_READY → All Children (5ms)                                            │
+│  │            │                                                                                │
+│  │            │  Child1: RECOVER (20ms) → READY                                               │
+│  │            │  Child2: RECOVER (20ms) → READY                                               │
+│  │            │  Child3: RECOVER (20ms) → READY                                               │
+│  │            │  Child4: RECOVER (20ms) → READY                                               │
+│  │            │                                                                                │
+│  │            │  ✅ allProcessesReady (100ms)                                                  │
+│  │            │  🚀 Job Submitter fires                                                       │
+│  │                                                                                             │
+│  │  TOTAL: ~150ms                                                                             │
+│                                                                                                 │
+│  ⚡ SAVINGS: 2700ms → 150ms (18x faster!)                                                     │
+└─────────────────────────────────────────────────────────────────────────────────────────────────┘

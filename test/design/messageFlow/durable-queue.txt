@@ -1,0 +1,40 @@
+Processing Worker                DurableQueue                WriteQueue              SQLite Comm Worker
+───────────────                  ────────────                ──────────              ──────────────────
+     │                                │                          │                            │
+     │  1. queue.ack(jobId)          │                          │                            │
+     ├───────────────────────────────►│                          │                            │
+     │                                │                          │                            │
+     │                                │  2. writeQueue.enqueue()│                            │
+     │                                ├─────────────────────────►│                            │
+     │                                │   { type: 'ack',        │                            │
+     │                                │     jobId: 'NSE-OPTION' }                            │
+     │                                │                          │                            │
+     │  3. Returns IMMEDIATELY       │                          │                            │
+     │◄───────────────────────────────┤                          │                            │
+     │  (No waiting for SQLite)      │                          │                            │
+     │                                │                          │                            │
+     │  4. Continues to next job     │                          │                            │
+     │                                │                          │                            │
+     │                                │                          │  5. Polls every 100ms     │
+     │                                │                          │◄───────────────────────────┤
+     │                                │                          │                            │
+     │                                │                          │  6. dequeueBatch(50)      │
+     │                                │                          ├───────────────────────────►│
+     │                                │                          │                            │
+     │                                │                          │  7. Gets 50 operations    │
+     │                                │                          │                            │
+     │                                │                          │  8. Sends each to SQLite  │
+     │                                │                          │    Server via IPC         │
+     │                                │                          ├───────────────────────────►│
+     │                                │                          │                            │
+     │                                │                          │                            │  9. SQLite Server
+     │                                │                          │                            │     processes each
+     │                                │                          │                            │     individually
+     │                                │                          │                            │
+     │                                │                          │  10. Response received    │
+     │                                │                          │◄───────────────────────────┤
+     │                                │                          │                            │
+     │                                │                          │                            │
+     │  ✅ Worker never blocked       │                          │                            │
+     │     SQLite operations happen   │                          │                            │
+     │     in background              │                          │                            │

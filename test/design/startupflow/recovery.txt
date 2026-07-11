@@ -1,0 +1,16 @@
+┌─────────────────────────────────────────────────────────────────────────────────────┐
+│                    CRASH RECOVERY FLOW                                               │
+├─────────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                     │
+│  Parent detects child crash (heartbeat timeout or exit)                           │
+│                                                                                     │
+│  Parent: serverReady = true (server is already running)                           │
+│  Parent: Restart child with serverReady = true                                   │
+│                                                                                     │
+│  Child (Restarted):                                                               │
+│    ├── serverReady = true → RECOVER (SELECT * FROM queue WHERE status IN ('PENDING','IN_FLIGHT'))│
+│    ├── Rebuilds in-memory queue from SQLite                                      │
+│    └── Send "READY" to Parent                                                    │
+│                                                                                     │
+│  Total restart time: ~200ms (ONE SQL query)                                      │
+└─────────────────────────────────────────────────────────────────────────────────────┘

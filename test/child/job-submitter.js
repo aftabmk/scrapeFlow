@@ -3,10 +3,12 @@ const BaseChildProcess = require('./base');
 
 class JobSubmitterProcess extends BaseChildProcess {
     constructor(options = {}) {
+        // ✅ Set processingWorkers to 5 for parallel submission
         const opts = {
             ...options,
             processType: 'job-submitter',
-            queueName: options.queueName || 'job_submitter_queue'
+            queueName: options.queueName || 'job_submitter_queue',
+            processingWorkers: 5
         };
         
         super(opts);
@@ -14,18 +16,20 @@ class JobSubmitterProcess extends BaseChildProcess {
         this.submitState = {
             jobsSubmitted: 0,
             maxJobs: 10,
-            submitInterval: 300,
+            submitInterval: 3000,
             isSubmitting: false,
             submitTimer: null,
             events: [],
-            currentEventIndex: 0
+            currentEventIndex: 0,
+            batchSize: 5
         };
         
-        console.log(`[JobSubmitter] 🟢 Ready with 5 workers, waiting for start signal`);
+        console.log(`[JobSubmitter] 🟢 Ready with ${this.processingWorkers} workers, waiting for start signal`);
         console.log(`[JobSubmitter] 📨 PID: ${process.pid}`);
     }
 
-    // ✅ Override _setupIPCListener to handle START_SUBMITTING
+    // === Override _setupIPCListener to handle START_SUBMITTING ===
+
     _setupIPCListener() {
         console.log(`[JobSubmitter] 📨 Setting up IPC listener...`);
         
@@ -56,39 +60,97 @@ class JobSubmitterProcess extends BaseChildProcess {
         });
     }
 
-    // ✅ Override _processJob to handle submission logic
-    async _processJob(job) {
-        // Each worker will process one event submission
-        // This is where the actual job submission happens
-        console.log(`[JobSubmitter] 🔄 Worker processing submission for job: ${job.id}`);
+    // === Override _startWorkers ===
+
+    _startWorkers() {
+        console.log(`[JobSubmitter] 👷 Starting ${this.processingWorkers} workers for job submission...`);
+        this.workers = [];
+        for (let i = 0; i < this.processingWorkers; i++) {
+            this._startWorker(i);
+        }
+    }
+
+    // === Override _workerLoop ===
+
+    async _startWorker(workerId) {
+        console.log(`[JobSubmitter] 👷 Worker ${workerId} started`);
+        let emptyCount = 0;
         
-        // The job data contains the event to submit
-        const eventData = job.data?.event;
-        const jobNumber = job.data?.jobNumber || 0;
-        const totalJobs = job.data?.totalJobs || 0;
+        while (this.isRunning) {
+            try {
+                const job = await this.queue.dequeue();
+                
+                if (!job) {
+                    emptyCount++;
+                    if (emptyCount % 50 === 0) {
+                        console.log(`[JobSubmitter] ⏳ Worker ${workerId} waiting for events...`);
+                    }
+                    await this._sleep(500);
+                    continue;
+                }
+                
+                emptyCount = 0;
+                
+                console.log(`[JobSubmitter] 🔄 Worker ${workerId} processing submission for: ${job.id}`);
+                
+                try {
+                    const result = await this._processJob(job);
+                    await this.queue.ack(job.id, result);
+                    
+                    console.log(`[JobSubmitter] ✅ Worker ${workerId} completed submission for ${job.id}`);
+                    
+                } catch (error) {
+                    console.error(`[JobSubmitter] ❌ Worker ${workerId} failed submission for ${job.id}:`, error.message);
+                    
+                    // Send failure
+                    process.send({
+                        type: 'JOB_FAILED',
+                        jobId: job.id,
+                        error: error.message,
+                        timestamp: Date.now()
+                    });
+                }
+                
+            } catch (error) {
+                console.error(`[JobSubmitter] Worker ${workerId} loop error:`, error);
+                await this._sleep(1000);
+            }
+        }
+        
+        console.log(`[JobSubmitter] 👷 Worker ${workerId} stopped`);
+    }
+
+    // === Override _processJob ===
+
+    async _processJob(job) {
+        const data = job.data || {};
+        const eventData = data.event;
+        const jobNumber = data.jobNumber || 0;
+        const totalJobs = data.totalJobs || 0;
         
         if (!eventData) {
-            console.log('[JobSubmitter] ⚠️ No event data in job');
-            return { success: false, error: 'No event data' };
+            throw new Error('No event data in job');
         }
 
-        // Validate EXCHANGE and CONTRACT
+        // ✅ Validate EXCHANGE and CONTRACT
         if (!eventData.EXCHANGE || !eventData.CONTRACT) {
             console.log(`[JobSubmitter] ❌ Event missing EXCHANGE or CONTRACT, skipping...`);
-            return { success: false, error: 'Missing EXCHANGE or CONTRACT' };
+            throw new Error('Missing EXCHANGE or CONTRACT');
         }
 
-        // Create ID: exchange-contract
+        // ✅ Create ID: exchange-contract
         const jobId = `${eventData.EXCHANGE}-${eventData.CONTRACT}`;
         
         console.log(`[JobSubmitter] 📤 Submitting event ${jobNumber}/${totalJobs}: ${jobId}`);
         console.log(`[JobSubmitter]   EXCHANGE: ${eventData.EXCHANGE}`);
         console.log(`[JobSubmitter]   CONTRACT: ${eventData.CONTRACT}`);
         
+        // ✅ Build job for orchestrator
         const submitJob = {
             id: jobId,
             type: 'analyzer',
             data: {
+                id: jobId,
                 event: eventData,
                 exchange: eventData.EXCHANGE,
                 contract: eventData.CONTRACT,
@@ -105,7 +167,7 @@ class JobSubmitterProcess extends BaseChildProcess {
             }
         };
         
-        // Send SUBMIT_JOB to orchestrator
+        // ✅ Send SUBMIT_JOB to orchestrator
         if (process.send) {
             process.send({
                 type: 'SUBMIT_JOB',
@@ -118,10 +180,11 @@ class JobSubmitterProcess extends BaseChildProcess {
             console.log(`[JobSubmitter] ✅ Submitted ${jobId} (${jobNumber}/${totalJobs})`);
             return { success: true, jobId };
         } else {
-            console.log('[JobSubmitter] ❌ process.send not available');
-            return { success: false, error: 'process.send not available' };
+            throw new Error('process.send not available');
         }
     }
+
+    // === Start Submitting ===
 
     async _startSubmitting(config = {}) {
         console.log(`[JobSubmitter] 📤 _startSubmitting called`);
@@ -139,7 +202,7 @@ class JobSubmitterProcess extends BaseChildProcess {
         this.submitState.jobsSubmitted = 0;
         this.submitState.currentEventIndex = 0;
         
-        console.log(`[JobSubmitter] 📤 Starting to submit ${this.submitState.maxJobs} events with 5 workers...`);
+        console.log(`[JobSubmitter] 📤 Starting to submit ${this.submitState.maxJobs} events with ${this.processingWorkers} workers...`);
         console.log(`[JobSubmitter] ⏱️ Interval: ${this.submitState.submitInterval}ms`);
         console.log(`[JobSubmitter] 📋 Events count: ${this.submitState.events.length}`);
         
@@ -153,10 +216,10 @@ class JobSubmitterProcess extends BaseChildProcess {
             });
         }
 
-        // ✅ Submit first batch of events to workers
+        // ✅ Submit first batch of events
         await this._submitNextBatch();
         
-        // Start interval for subsequent batches
+        // ✅ Start interval for subsequent batches
         this.submitState.submitTimer = setInterval(async () => {
             if (this.submitState.jobsSubmitted >= this.submitState.maxJobs || !this.isRunning) {
                 clearInterval(this.submitState.submitTimer);
@@ -175,19 +238,31 @@ class JobSubmitterProcess extends BaseChildProcess {
         }, this.submitState.submitInterval);
     }
 
+    // === Submit Next Batch ===
+
     async _submitNextBatch() {
-        // ✅ Submit up to 5 events at a time (one per worker)
-        const batchSize = Math.min(5, this.submitState.maxJobs - this.submitState.jobsSubmitted);
+        // ✅ Submit up to batchSize events at a time (one per worker)
+        const batchSize = Math.min(this.submitState.batchSize, this.submitState.maxJobs - this.submitState.jobsSubmitted);
         const batch = [];
         
         for (let i = 0; i < batchSize; i++) {
             if (this.submitState.currentEventIndex >= this.submitState.events.length) break;
+            
             const eventData = this.submitState.events[this.submitState.currentEventIndex];
             const jobNumber = this.submitState.jobsSubmitted + 1;
             
-            // ✅ Enqueue each event as a job for workers to process
+            // ✅ Validate event
+            if (!eventData.EXCHANGE || !eventData.CONTRACT) {
+                console.log(`[JobSubmitter] ❌ Event ${jobNumber} missing EXCHANGE or CONTRACT, skipping...`);
+                this.submitState.jobsSubmitted++;
+                this.submitState.currentEventIndex++;
+                continue;
+            }
+            
+            // ✅ Create job for worker
+            const jobId = `${eventData.EXCHANGE}-${eventData.CONTRACT}`;
             const job = {
-                id: `${eventData.EXCHANGE}-${eventData.CONTRACT}`,
+                id: jobId,
                 data: {
                     event: eventData,
                     jobNumber: jobNumber,
@@ -198,13 +273,17 @@ class JobSubmitterProcess extends BaseChildProcess {
             // ✅ Enqueue to durable queue (workers will pick up)
             await this.queue.enqueue(job);
             
-            batch.push({ eventData, jobNumber });
+            batch.push({ eventData, jobNumber, jobId });
             this.submitState.jobsSubmitted++;
             this.submitState.currentEventIndex++;
         }
         
-        console.log(`[JobSubmitter] 📤 Queued ${batch.length} events for workers (${this.submitState.jobsSubmitted}/${this.submitState.maxJobs})`);
+        if (batch.length > 0) {
+            console.log(`[JobSubmitter] 📤 Queued ${batch.length} events for workers (${this.submitState.jobsSubmitted}/${this.submitState.maxJobs})`);
+        }
     }
+
+    // === Send Status ===
 
     _sendStatus() {
         if (process.send) {
@@ -221,6 +300,8 @@ class JobSubmitterProcess extends BaseChildProcess {
             });
         }
     }
+
+    // === Shutdown ===
 
     async shutdown() {
         console.log(`[JobSubmitter] 🛑 Shutting down...`);
