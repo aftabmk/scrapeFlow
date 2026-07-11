@@ -1,139 +1,179 @@
 // main.js
+const { EventEmitter } = require('events');
 const Orchestrator = require('./parent/orchestrator');
 
-class Application {
-  constructor(config = {}) {
-    this.config = config;
-    this.orchestrator = null;
-    this.jobSubmitterStarted = false;
-    this.events = config.events || [];
-  }
+class Application extends EventEmitter {
+    constructor(options = {}) {
+        super();
+        this.orchestrator = null;
+        this.jobSubmitterStarted = false;
+        this.options = options;
+        this.eventConfig = options.events || [];
+        this.isReady = false;
+    }
 
-  async start() {
-    const { app: appConfig, workers, events } = this.config;
-    
-    console.log(`🚀 Starting Application (${this.config.env})...`);
-    console.log(`📋 Loaded ${events.length} events from config`);
+    async start(eventConfig = []) {
+        const events = eventConfig.length > 0 ? eventConfig : this.eventConfig;
+        this.eventConfig = events;
+        
+        console.log('🚀 Starting Application...');
+        console.log(`📋 Loaded ${events.length} events from config`);
 
-    try {
-      this.orchestrator = new Orchestrator({
-        heartbeatTimeout: appConfig.heartbeatTimeout,
-        restartDelay: appConfig.restartDelay
-      });
+        try {
+            this.orchestrator = new Orchestrator({
+                heartbeatTimeout: this.options.heartbeatTimeout || 15000,
+                restartDelay: this.options.restartDelay || 2000
+            });
 
-      this._setupEventListeners();
+            this._setupEventListeners();
 
-      console.log('📦 Creating child processes...');
+            console.log('📦 Creating child processes...');
 
-      await this.orchestrator.createProcess({
-        type: 'analyzer',
-        processingWorkers: workers.analyzer,
-        queueName: 'analyzer_queue'
-      });
+            await this.orchestrator.createProcess({
+                type: 'analyzer',
+                processingWorkers: this.options.analyzerWorkers || 2,
+                queueName: 'analyzer_queue'
+            });
 
-      await this.orchestrator.createProcess({
-        type: 'browser',
-        processingWorkers: workers.browser,
-        queueName: 'browser_queue'
-      });
+            await this.orchestrator.createProcess({
+                type: 'browser',
+                processingWorkers: this.options.browserWorkers || 2,
+                queueName: 'browser_queue'
+            });
 
-      await this.orchestrator.createProcess({
-        type: 'exporter',
-        processingWorkers: workers.exporter,
-        queueName: 'export_queue'
-      });
+            await this.orchestrator.createProcess({
+                type: 'exporter',
+                processingWorkers: this.options.exporterWorkers || 1,
+                queueName: 'export_queue'
+            });
 
-      await this.orchestrator.createProcess({
-        type: 'job-submitter',
-        processingWorkers: 0,
-        queueName: 'job_submitter_queue'
-      });
+            await this.orchestrator.createProcess({
+                type: 'job-submitter',
+                processingWorkers: 5,
+                queueName: 'job_submitter_queue'
+            });
 
-      console.log('✅ All processes created!');
+            console.log('✅ All processes created!');
 
-      this.orchestrator.once('allProcessesReady', async () => {
-        if (!this.jobSubmitterStarted) {
-          this.jobSubmitterStarted = true;
-          console.log('\n🎯 All processes ready! Starting job submitter...\n');
-          await this.orchestrator.startJobSubmitter({
-            events: events,
-            maxJobs: appConfig.maxJobs || events.length,
-            submitInterval: appConfig.submitInterval
-          });
+            // ✅ Forward allProcessesReady from orchestrator
+            this.orchestrator.once('allProcessesReady', () => {
+                console.log('\n🎯 All processes ready! Forwarding to app...');
+                this.isReady = true;
+                this.emit('allProcessesReady');
+            });
+
+            // ✅ Check if already ready (edge case)
+            if (this.orchestrator.allProcessesReady) {
+                console.log('\n🎯 All processes already ready! Forwarding to app...');
+                this.isReady = true;
+                this.emit('allProcessesReady');
+            }
+
+            // ❌ REMOVE the 10-second timeout fallback
+            // It's causing unnecessary delay since allProcessesReady fires correctly
+
+            console.log('🎯 System ready!');
+            console.log('📊 Press Ctrl+C to stop');
+            
+            return this;
+
+        } catch (error) {
+            console.error('❌ Failed to start application:', error);
+            throw error;
         }
-      });
-
-      console.log('🎯 System ready!');
-      console.log('📊 Press Ctrl+C to stop');
-      
-      return this;
-
-    } catch (error) {
-      console.error('❌ Failed to start application:', error);
-      throw error;
     }
-  }
 
-  _setupEventListeners() {
-    this.orchestrator.on('processReady', ({ pid, type, processingWorkers }) => {
-      console.log(`✅ Process ${pid} (${type}) ready with ${processingWorkers} workers`);
-    });
+    _setupEventListeners() {
+        this.orchestrator.on('processReady', ({ pid, type, processingWorkers }) => {
+            console.log(`✅ Process ${pid} (${type}) ready with ${processingWorkers} workers`);
+        });
 
-    this.orchestrator.on('processExit', ({ pid, type, code }) => {
-      if (code !== 0) {
-        console.log(`⚠️ Process ${pid} (${type}) exited with code ${code}`);
-      }
-    });
+        this.orchestrator.on('processExit', ({ pid, type, code }) => {
+            if (code !== 0) {
+                console.log(`⚠️ Process ${pid} (${type}) exited with code ${code}`);
+            }
+        });
 
-    this.orchestrator.on('jobFullyComplete', ({ jobId }) => {
-      console.log(`🎉 Job ${jobId} fully completed through all stages!`);
-    });
+        this.orchestrator.on('jobFullyComplete', ({ jobId }) => {
+            console.log(`🎉 Job ${jobId} fully completed through all stages!`);
+        });
 
-    this.orchestrator.on('submitterStarted', ({ maxJobs, submitInterval }) => {
-      console.log(`📤 Job submitter started: ${maxJobs} jobs, interval: ${submitInterval}ms`);
-    });
+        this.orchestrator.on('submitterStarted', ({ maxJobs, submitInterval }) => {
+            console.log(`📤 Job submitter started: ${maxJobs} jobs, interval: ${submitInterval}ms`);
+        });
 
-    this.orchestrator.on('submitterComplete', ({ totalJobs }) => {
-      console.log(`✅ All ${totalJobs} events processed by job-submitter!`);
-    });
+        this.orchestrator.on('submitterComplete', ({ totalJobs }) => {
+            console.log(`✅ All ${totalJobs} events processed by job-submitter!`);
+        });
 
-    this.orchestrator.on('jobSubmitted', ({ jobNumber, totalJobs, jobId, eventData }) => {
-      if (eventData) {
-        console.log(`📤 Event ${jobNumber}/${totalJobs}: ${eventData.EXCHANGE} - ${eventData.CONTRACT}`);
-      }
-    });
+        this.orchestrator.on('jobSubmitted', ({ jobNumber, totalJobs, jobId, eventData }) => {
+            if (eventData) {
+                console.log(`📤 Event ${jobNumber}/${totalJobs}: ${eventData.EXCHANGE} - ${eventData.CONTRACT} (${jobId})`);
+            } else {
+                console.log(`📤 Event ${jobNumber}/${totalJobs} submitted: ${jobId}`);
+            }
+        });
 
-    this.orchestrator.on('jobSubmissionError', ({ jobNumber, error }) => {
-      console.error(`❌ Event ${jobNumber} submission failed:`, error);
-    });
+        this.orchestrator.on('jobSubmissionError', ({ jobNumber, error }) => {
+            console.error(`❌ Event ${jobNumber} submission failed:`, error);
+        });
 
-    this.orchestrator.on('heartbeatTimeout', ({ pid }) => {
-      console.log(`⏰ Heartbeat timeout for process ${pid}`);
-    });
-  }
-
-  async stop() {
-    console.log('\n🛑 Shutting down...');
-    if (this.orchestrator) {
-      await this.orchestrator.shutdown();
+        this.orchestrator.on('heartbeatTimeout', ({ pid }) => {
+            console.log(`⏰ Heartbeat timeout for process ${pid}`);
+        });
     }
-    console.log('✅ Shutdown complete');
-  }
 
-  getOrchestrator() {
-    return this.orchestrator;
-  }
-
-  getProcessStats() {
-    return this.orchestrator ? this.orchestrator.getProcessStats() : null;
-  }
-
-  async submitJob(jobData) {
-    if (!this.orchestrator) {
-      throw new Error('Orchestrator not initialized');
+    async startJobSubmitter() {
+        if (this.jobSubmitterStarted) {
+            console.log('[Application] Job submitter already started');
+            return;
+        }
+        this.jobSubmitterStarted = true;
+        
+        if (this.orchestrator) {
+            const events = this.eventConfig || [];
+            console.log(`[Application] 🚀 Starting job submitter with ${events.length} events`);
+            
+            if (events.length > 0) {
+                console.log(`[Application] 📋 Events:`, events.map(e => `${e.EXCHANGE}-${e.CONTRACT}`).join(', '));
+            }
+            
+            await this.orchestrator.startJobSubmitter({
+                events: events,
+                maxJobs: events.length,
+                submitInterval: this.options.submitInterval || 3000
+            });
+        } else {
+            console.error('[Application] Orchestrator not available');
+        }
     }
-    return this.orchestrator.submitJob(jobData);
-  }
+
+    async stop() {
+        console.log('\n🛑 Shutting down...');
+        if (this.orchestrator) {
+            await this.orchestrator.shutdown();
+        }
+        console.log('✅ Shutdown complete');
+        process.exit(0);
+    }
+
+    getOrchestrator() {
+        return this.orchestrator;
+    }
+
+    getProcessStats() {
+        if (this.orchestrator) {
+            return this.orchestrator.getProcessStats();
+        }
+        return null;
+    }
+
+    async submitJob(jobData) {
+        if (this.orchestrator) {
+            return this.orchestrator.submitJob(jobData);
+        }
+        throw new Error('Orchestrator not initialized');
+    }
 }
 
 module.exports = Application;
