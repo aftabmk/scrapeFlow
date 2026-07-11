@@ -3,10 +3,6 @@ const { DatabaseSync } = require('node:sqlite');
 const path = require('path');
 const fs = require('fs');
 
-/**
- * Durable Queue using node:sqlite with WAL support
- * Uses memory cache for fast operations
- */
 class DurableQueue {
   constructor(options = {}) {
     this.queueName = options.queueName || 'default_queue';
@@ -18,12 +14,9 @@ class DurableQueue {
     this.isConnected = false;
     this.tableName = `queue_${this.queueName}`;
     
-    // Memory cache using arrays (still efficient for cache)
-    // We use arrays because we need random access and sorting
     this.memoryCache = {
-      pending: [],      // Array of pending jobs (sorted by priority)
-      inProgress: new Map(), // Map of job_id -> job
-      completed: []
+      pending: [],
+      inProgress: new Map()
     };
     this.isRebuilding = false;
     
@@ -31,7 +24,6 @@ class DurableQueue {
       totalEnqueued: 0,
       totalDequeued: 0,
       totalAcked: 0,
-      totalFailed: 0,
       totalTimeout: 0,
       totalRebuilt: 0
     };
@@ -83,17 +75,15 @@ class DurableQueue {
     this.isConnected = true;
     
     this.rebuild().catch(err => {
-      console.error(`Failed to rebuild queue ${this.queueName}:`, err);
+      console.error(`[DurableQueue] Failed to rebuild ${this.queueName}:`, err);
     });
   }
-
-  // === REBUILD FROM SQLITE ===
 
   async rebuild() {
     if (this.isRebuilding) return;
     this.isRebuilding = true;
 
-    console.log(`[DurableQueue] Rebuilding ${this.queueName} from SQLite...`);
+    console.log(`[DurableQueue] Rebuilding ${this.queueName}...`);
 
     try {
       const stmt = this.db.prepare(`
@@ -106,7 +96,6 @@ class DurableQueue {
 
       this.memoryCache.pending = [];
       this.memoryCache.inProgress = new Map();
-      this.memoryCache.completed = [];
 
       let pendingCount = 0;
       let inProgressCount = 0;
@@ -127,7 +116,6 @@ class DurableQueue {
           const now = new Date();
           
           if (visibleAt <= now) {
-            // Job timed out - requeue it (skip ACK)
             const updateStmt = this.db.prepare(`
               UPDATE ${this.tableName}
               SET status = 'PENDING',
@@ -156,7 +144,6 @@ class DurableQueue {
         }
       }
 
-      // Sort pending by priority (highest first)
       this.memoryCache.pending.sort((a, b) => {
         if (a.priority !== b.priority) return b.priority - a.priority;
         return new Date(a.created_at) - new Date(b.created_at);
@@ -165,11 +152,7 @@ class DurableQueue {
       this.stats.totalRebuilt = rows.length;
       this.isRebuilding = false;
 
-      console.log(`[DurableQueue] Rebuilt ${this.queueName}:`);
-      console.log(`  - Pending: ${pendingCount} jobs`);
-      console.log(`  - In Progress: ${inProgressCount} jobs`);
-      console.log(`  - Requeued: ${requeuedCount} jobs`);
-      console.log(`  - Total: ${rows.length} jobs`);
+      console.log(`[DurableQueue] ${this.queueName} rebuilt: ${pendingCount} pending, ${inProgressCount} in-progress, ${requeuedCount} requeued`);
 
       return {
         pending: pendingCount,
@@ -183,8 +166,6 @@ class DurableQueue {
       throw error;
     }
   }
-
-  // === Public API ===
 
   async enqueue(jobData) {
     const jobId = jobData.jobId || this._generateJobId();
@@ -208,7 +189,6 @@ class DurableQueue {
         created_at: new Date().toISOString()
       });
       
-      // Sort by priority
       this.memoryCache.pending.sort((a, b) => {
         if (a.priority !== b.priority) return b.priority - a.priority;
         return new Date(a.created_at) - new Date(b.created_at);
@@ -223,7 +203,6 @@ class DurableQueue {
   }
 
   async dequeue(workerId) {
-    // Try from memory cache first
     if (this.memoryCache.pending.length > 0) {
       const job = this.memoryCache.pending.shift();
       
@@ -254,7 +233,6 @@ class DurableQueue {
       }
     }
 
-    // Fallback to SQLite
     try {
       const stmt = this.db.prepare(`
         SELECT * FROM ${this.tableName}
@@ -290,22 +268,6 @@ class DurableQueue {
     } catch (error) {
       throw error;
     }
-  }
-
-  async dequeueMultiple(workerId, count) {
-    const jobs = [];
-    const maxDequeue = Math.min(count, 10);
-    
-    for (let i = 0; i < maxDequeue; i++) {
-      const job = await this.dequeue(workerId);
-      if (job) {
-        jobs.push(job);
-      } else {
-        break;
-      }
-    }
-    
-    return jobs;
   }
 
   async ack(jobId, result) {
@@ -358,21 +320,6 @@ class DurableQueue {
     }
   }
 
-  async cleanup(olderThanDays = 7) {
-    try {
-      const stmt = this.db.prepare(`
-        DELETE FROM ${this.tableName}
-        WHERE status = 'COMPLETE' 
-          AND completed_at < DATETIME(CURRENT_TIMESTAMP, '-' || ? || ' days')
-      `);
-      const result = stmt.run(olderThanDays);
-      return result.changes;
-
-    } catch (error) {
-      throw error;
-    }
-  }
-
   _generateJobId() {
     return `${this.queueName}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
   }
@@ -382,7 +329,7 @@ class DurableQueue {
       try {
         await this._processTimeouts();
       } catch (err) {
-        console.error(`Timeout monitor error for ${this.queueName}:`, err);
+        console.error(`[DurableQueue] Timeout monitor error for ${this.queueName}:`, err);
       }
     }, 5000);
   }

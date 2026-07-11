@@ -60,7 +60,8 @@ class ProcessingWorker extends EventEmitter {
       
       this.emit('jobComplete', { workerId: this.workerId, jobId: job.job_id, result });
       
-    } catch (error) {
+    } 
+    catch (error) {
       console.error(`Worker ${this.workerId} failed job ${job.job_id}:`, error);
       this.emit('jobFailed', { workerId: this.workerId, jobId: job.job_id, error });
       

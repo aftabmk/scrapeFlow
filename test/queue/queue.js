@@ -14,7 +14,7 @@ class QueueNode {
  * Normal Queue implementation using Linked List
  * O(1) enqueue and dequeue operations
  */
-class NormalQueue {
+class Queue {
   constructor(options = {}) {
     this.head = null;
     this.tail = null;
@@ -167,4 +167,4 @@ class NormalQueue {
   }
 }
 
-module.exports = NormalQueue;
+module.exports = Queue;

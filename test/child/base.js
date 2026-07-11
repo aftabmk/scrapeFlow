@@ -1,52 +1,64 @@
 // child/base.js
 const { EventEmitter } = require('events');
-const SQLiteCommWorker = require('../workers/sqlite-comm-worker');
-const ProcessingWorker = require('../workers/processing-worker');
+const DurableQueue = require('../queue/durable-queue');
 
 class BaseChildProcess extends EventEmitter {
   constructor(options = {}) {
     super();
-    this.processType = options.processType || 'generic';
-    this.queueName = options.queueName || `${this.processType}_queue`;
-    this.processingWorkers = options.processingWorkers || 2;
-    this.commWorkers = options.commWorkers || 1;
+    
+    const args = this._parseArgs();
+    
+    this.processType = options.processType || args.processType || 'generic';
+    this.queueName = options.queueName || args.queueName || `${this.processType}_queue`;
+    this.processingWorkers = options.processingWorkers || parseInt(args.processingWorkers) || 2;
+    this.dbPath = options.dbPath || './data/queue.db';
     this.isRunning = true;
     
-    this.commWorker = null;
-    this.workers = [];
+    // Only create queue if not job-submitter (or if processingWorkers > 0)
+    if (this.processingWorkers > 0) {
+      this.queue = new DurableQueue({
+        queueName: this.queueName,
+        dbPath: this.dbPath
+      });
+    } else {
+      this.queue = null;
+    }
     
-    this._initWorkers();
+    this.activeJobs = new Map();
+    this.jobCounter = 0;
+    
+    console.log(`[${this.processType}] Starting with ${this.processingWorkers} workers`);
+    console.log(`[${this.processType}] Queue: ${this.queueName}`);
+    
     this._setupIPCListener();
     this._startHeartbeat();
-  }
-
-  _initWorkers() {
-    this.commWorker = new SQLiteCommWorker({
-      workerId: `comm_${process.pid}`,
-      processType: this.processType,
-      queueName: this.queueName
-    });
-
-    for (let i = 0; i < this.processingWorkers; i++) {
-      const worker = new ProcessingWorker({
-        workerId: `worker_${i}_${process.pid}`,
-        sqliteComm: this.commWorker,
-        handler: this._getTaskHandler(),
-        pollInterval: 1000
-      });
-      
-      worker.on('jobStarted', (data) => this.emit('jobStarted', data));
-      worker.on('jobComplete', (data) => this.emit('jobComplete', data));
-      worker.on('jobFailed', (data) => this.emit('jobFailed', data));
-      
-      this.workers.push(worker);
+    
+    // Only start workers if there are workers to start
+    if (this.processingWorkers > 0) {
+      this._startWorkers();
+    } else {
+      console.log(`[${this.processType}] No workers configured (submitter mode)`);
     }
-
-    this.emit('ready', {
+    
+    process.send({
+      type: 'ready',
       processType: this.processType,
       processingWorkers: this.processingWorkers,
-      queueName: this.queueName
+      queueName: this.queueName,
+      pid: process.pid
     });
+  }
+
+  _parseArgs() {
+    const args = {};
+    for (let i = 2; i < process.argv.length; i++) {
+      const arg = process.argv[i];
+      if (arg.startsWith('--')) {
+        const [key, value] = arg.slice(2).split('=');
+        args[key] = value || true;
+      }
+    }
+    return args;
   }
 
   _setupIPCListener() {
@@ -63,24 +75,26 @@ class BaseChildProcess extends EventEmitter {
         case 'SHUTDOWN':
           await this.shutdown();
           break;
-        case 'RESTART':
-          await this.restart();
-          break;
-        case 'SCALE_WORKERS':
-          await this._scaleWorkers(message.count);
-          break;
         default:
-          console.warn(`Unknown message type: ${message.type}`);
+          // Ignore other messages (like START_SUBMITTING for job-submitter)
+          // Job-submitter handles this in its own override
       }
     });
   }
 
   async _handleNewJob(message) {
+    if (!this.queue) {
+      console.log(`[${this.processType}] No queue available (submitter mode)`);
+      return;
+    }
+    
     try {
-      const jobId = await this.commWorker.enqueue({
+      const jobId = await this.queue.enqueue({
         ...message.data,
         jobId: message.jobId
       });
+      
+      console.log(`[${this.processType}] 📝 Job ${jobId} enqueued to durable queue`);
       
       process.send({
         type: 'JOB_QUEUED',
@@ -88,6 +102,7 @@ class BaseChildProcess extends EventEmitter {
         timestamp: Date.now()
       });
     } catch (error) {
+      console.error(`[${this.processType}] Failed to enqueue job:`, error);
       process.send({
         type: 'JOB_ERROR',
         jobId: message.jobId,
@@ -96,48 +111,86 @@ class BaseChildProcess extends EventEmitter {
     }
   }
 
-  _getTaskHandler() {
-    return async (job) => {
-      throw new Error('Task handler not implemented');
-    };
+  _startWorkers() {
+    for (let i = 0; i < this.processingWorkers; i++) {
+      this._workerLoop(i);
+    }
   }
 
-  async _scaleWorkers(count) {
-    const currentCount = this.workers.length;
-    
-    if (count > currentCount) {
-      for (let i = currentCount; i < count; i++) {
-        const worker = new ProcessingWorker({
-          workerId: `worker_${i}_${process.pid}`,
-          sqliteComm: this.commWorker,
-          handler: this._getTaskHandler()
-        });
-        worker.on('jobStarted', (data) => this.emit('jobStarted', data));
-        worker.on('jobComplete', (data) => this.emit('jobComplete', data));
-        worker.on('jobFailed', (data) => this.emit('jobFailed', data));
-        this.workers.push(worker);
-      }
-    } else if (count < currentCount) {
-      const idleWorkers = this.workers.filter(w => !w.isBusy);
-      const toRemove = idleWorkers.slice(0, currentCount - count);
-      for (const worker of toRemove) {
-        worker.shutdown();
-        const idx = this.workers.indexOf(worker);
-        if (idx !== -1) {
-          this.workers.splice(idx, 1);
+  async _workerLoop(workerId) {
+    while (this.isRunning) {
+      try {
+        if (!this.queue) {
+          await this._sleep(1000);
+          continue;
         }
+        
+        const job = await this.queue.dequeue(`worker_${workerId}`);
+        
+        if (!job) {
+          await this._sleep(500);
+          continue;
+        }
+
+        this.activeJobs.set(job.job_id, { workerId, job, startedAt: Date.now() });
+
+        try {
+          console.log(`[${this.processType}] 🔄 Worker ${workerId} processing ${job.job_id}`);
+          
+          const result = await this._processJob(job);
+          
+          await this.queue.ack(job.job_id, result);
+          
+          this.activeJobs.delete(job.job_id);
+          console.log(`[${this.processType}] ✅ Job ${job.job_id} completed and acknowledged`);
+          
+          process.send({
+            type: 'JOB_COMPLETE',
+            jobId: job.job_id,
+            result,
+            timestamp: Date.now()
+          });
+          
+        } catch (error) {
+          this.activeJobs.delete(job.job_id);
+          console.error(`[${this.processType}] ❌ Job ${job.job_id} failed:`, error.message);
+          
+          process.send({
+            type: 'JOB_FAILED',
+            jobId: job.job_id,
+            error: error.message,
+            timestamp: Date.now()
+          });
+        }
+      } catch (error) {
+        console.error(`[${this.processType}] Worker ${workerId} error:`, error);
+        await this._sleep(1000);
       }
     }
   }
 
+  async _processJob(job) {
+    // Override in child classes
+    await this._sleep(1000);
+    return {
+      jobId: job.job_id,
+      processedAt: new Date().toISOString(),
+      data: job.data,
+      result: `Processed by ${this.processType}`
+    };
+  }
+
+  _sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
   _sendStatus() {
-    const workerStatus = this.workers.map(w => w.getStatus());
     process.send({
       type: 'STATUS',
       processType: this.processType,
-      commWorker: this.commWorker.workerId,
-      workers: workerStatus,
-      queueName: this.queueName
+      activeJobs: this.activeJobs.size,
+      queueSize: this.queue ? this.queue.memoryCache?.pending?.length || 0 : 0,
+      pid: process.pid
     });
   }
 
@@ -150,8 +203,8 @@ class BaseChildProcess extends EventEmitter {
         pid: process.pid,
         timestamp: Date.now(),
         stats: {
-          workers: this.workers.length,
-          activeWorkers: this.workers.filter(w => w.isBusy).length,
+          activeJobs: this.activeJobs.size,
+          workers: this.processingWorkers,
           queueName: this.queueName
         }
       });
@@ -159,32 +212,15 @@ class BaseChildProcess extends EventEmitter {
   }
 
   async shutdown() {
+    console.log(`[${this.processType}] Shutting down...`);
     this.isRunning = false;
     
-    for (const worker of this.workers) {
-      worker.shutdown();
-    }
-    
-    if (this.commWorker) {
-      this.commWorker.shutdown();
+    if (this.queue) {
+      this.queue.close();
     }
     
     process.send({ type: 'SHUTDOWN_COMPLETE' });
-    process.exit(0);
-  }
-
-  async restart() {
-    await this.shutdown();
-  }
-
-  cleanup() {
-    this.isRunning = false;
-    for (const worker of this.workers) {
-      worker.forceStop();
-    }
-    if (this.commWorker) {
-      this.commWorker.shutdown();
-    }
+    setTimeout(() => process.exit(0), 500);
   }
 }
 

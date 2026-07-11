@@ -1,6 +1,6 @@
 // sqlite-server/server.js
 const { EventEmitter } = require('events');
-const NormalQueue = require('../queue/normal-queue');
+const Queue = require('../queue/queue');
 const DurableQueue = require('../queue/durable-queue');
 const SQLiteWriteWorker = require('../workers/sqlite-write-worker');
 const SQLiteReadWorker = require('../workers/sqlite-read-worker');
@@ -13,8 +13,8 @@ class SQLiteServer extends EventEmitter {
     this.readWorkers = options.readWorkers || 3;
     this.queues = new Map();
     
-    this.writeQueue = new NormalQueue({ name: 'write_queue', maxSize: 10000 });
-    this.readQueue = new NormalQueue({ name: 'read_queue', maxSize: 10000 });
+    this.writeQueue = new Queue({ name: 'write_queue', maxSize: 10000 });
+    this.readQueue = new Queue({ name: 'read_queue', maxSize: 10000 });
     
     this.writeWorker = null;
     this.readWorkersList = [];
