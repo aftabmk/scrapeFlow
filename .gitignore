@@ -5,3 +5,4 @@
 *.db*
 *emsdk
 *build
+*performance/metrics
