@@ -17,6 +17,7 @@ class BrowserChildProcess extends BaseChildProcess {
         console.log(`[Browser] 📋 Job ID: ${job.id}`);
         console.log(`[Browser] 📋 URL: ${data.pageUrl || 'N/A'}`);
         
+        // Simulate browser scraping
         await this._sleep(1000 + Math.random() * 1500);
         
         return {
@@ -26,9 +27,12 @@ class BrowserChildProcess extends BaseChildProcess {
             contract: data.contract,
             pageUrl: data.pageUrl,
             apiUrl: data.apiUrl,
+            apiUrlBuilder: data.apiUrlBuilder,
             referer: data.referer,
             browserProcessed: true,
-            scrapedAt: new Date().toISOString()
+            scrapedAt: new Date().toISOString(),
+            metadata: data.metadata || {},
+            analysisJobId: data.analysisJobId
         };
     }
 

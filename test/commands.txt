@@ -1,0 +1,12 @@
+#build
+chmod +x run.sh
+#run
+./run.sh
+# Normal run
+./run.sh 1
+# Performance test
+./run.sh 4
+# CPU profiling
+./run.sh 8
+# Show help
+./run.sh -h

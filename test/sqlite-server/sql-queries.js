@@ -7,7 +7,7 @@ class SQLQueries {
     // === WRITE OPERATIONS ===
 
     append(queue, jobId, payload) {
-        const table = `queue_${queue}`;
+        const table = `queue_${queue}_queue`;
         
         const stmt = this.db.prepare(`
             INSERT OR REPLACE INTO ${table} (job_id, payload, status)
@@ -25,7 +25,7 @@ class SQLQueries {
     }
 
     deliver(queue, jobId) {
-        const table = `queue_${queue}`;
+        const table = `queue_${queue}_queue`;
 
         const stmt = this.db.prepare(`
             UPDATE ${table} 
@@ -50,7 +50,7 @@ class SQLQueries {
     }
 
     ack(queue, jobId) {
-        const table = `queue_${queue}`;
+        const table = `queue_${queue}_queue`;
 
         const stmt = this.db.prepare(`
             DELETE FROM ${table} WHERE job_id = ?
@@ -71,7 +71,7 @@ class SQLQueries {
     }
 
     requeue(queue, jobId) {
-        const table = `queue_${queue}`;
+        const table = `queue_${queue}_queue`;
 
         const stmt = this.db.prepare(`
             UPDATE ${table} 
@@ -102,7 +102,7 @@ class SQLQueries {
         `);
         stmt.run(queue, jobId, JSON.stringify(payload), payload?.retries || 0);
 
-        const table = `queue_${queue}`;
+        const table = `queue_${queue}_queue`;
         const deleteStmt = this.db.prepare(`
             DELETE FROM ${table} WHERE job_id = ?
         `);
@@ -120,7 +120,7 @@ class SQLQueries {
     // === READ OPERATIONS ===
 
     dequeue(queue, workerId) {
-        const table = `queue_${queue}`;
+        const table = `queue_${queue}_queue`;
 
         const stmt = this.db.prepare(`
             SELECT job_id, payload FROM ${table}
@@ -176,7 +176,7 @@ class SQLQueries {
     }
 
     recover(queue) {
-        const table = `queue_${queue}`;
+        const table = `queue_${queue}_queue`;
 
         const stmt = this.db.prepare(`
             SELECT job_id, payload FROM ${table} 
@@ -197,7 +197,7 @@ class SQLQueries {
     }
 
     stats(queue) {
-        const table = `queue_${queue}`;
+        const table = `queue_${queue}_queue`;
 
         const stmt = this.db.prepare(`
             SELECT 
@@ -224,29 +224,6 @@ class SQLQueries {
             dead_letter: deadRow?.count || 0,
             queue
         };
-    }
-
-    getOrCreateTable(queueName) {
-        const tableName = `queue_${queueName.replace(/[^a-zA-Z0-9_]/g, '_')}`;
-
-        this.db.exec(`
-            CREATE TABLE IF NOT EXISTS ${tableName} (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                job_id TEXT UNIQUE NOT NULL,
-                payload TEXT NOT NULL,
-                status TEXT DEFAULT 'PENDING',
-                retries INTEGER DEFAULT 0,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-        `);
-
-        this.db.exec(`
-            CREATE INDEX IF NOT EXISTS idx_${tableName}_status 
-            ON ${tableName}(status, created_at)
-        `);
-
-        return tableName;
     }
 
     // === HELPER ===

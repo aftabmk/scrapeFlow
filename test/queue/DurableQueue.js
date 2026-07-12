@@ -1,28 +1,23 @@
 // queue/DurableQueue.js
-const LinkedQueue = require("./LinkedQueue");
-const WriteQueue = require("./WriteQueue");
+const LinkedQueue = require('./LinkedQueue');
+const WriteQueue = require('./WriteQueue');
 
 class DurableQueue {
-    constructor(
-        name,
-        {
-            visibilityTimeout = 30000,
-            maxRetries = 5,
-            sweepInterval = 1000,
-            writeQueue = null,
-            commWorker = null
-        } = {}
-    ) {
+    constructor(name, options = {}) {
         this.name = name;
-        this.visibilityTimeout = visibilityTimeout;
-        this.maxRetries = maxRetries;
-        this.sweepInterval = sweepInterval;
-
+        this.visibilityTimeout = options.visibilityTimeout || 30000;
+        this.maxRetries = options.maxRetries || 5;
+        this.sweepInterval = options.sweepInterval || 1000;
+        
+        // ✅ serverReady flag - controls whether to recover
+        this.serverReady = options.serverReady || false;
+        this.recovered = false;
+        
         this.queue = new LinkedQueue(name);
         this.inFlight = new Map();
         this.deadLetter = [];
-        this.writeQueue = writeQueue || new WriteQueue();
-        this.commWorker = commWorker;
+        this.writeQueue = options.writeQueue || new WriteQueue();
+        this.commWorker = options.commWorker;
 
         this.stats = {
             enqueued: 0,
@@ -36,16 +31,21 @@ class DurableQueue {
         this.sweeperTimer = null;
         this._recoverPromise = null;
 
-        this._recoverPromise = this.recover().catch(err => {
-            console.error(`[DurableQueue:${this.name}] Recovery failed:`, err);
-        });
+        // ✅ Only recover if serverReady is true (crash restart)
+        if (this.serverReady) {
+            console.log(`[DurableQueue:${this.name}] 🔄 Server ready - recovering...`);
+            this._recoverPromise = this.recover().catch(err => {
+                console.error(`[DurableQueue:${this.name}] Recovery failed:`, err);
+            });
+        } else {
+            console.log(`[DurableQueue:${this.name}] ⏭️ Server not ready - skipping recover`);
+            this.recovered = true;
+        }
 
         this._startSweeper();
     }
 
-    setCommWorker(commWorker) {
-        this.commWorker = commWorker;
-    }
+    // === Sweeper for timed-out jobs ===
 
     _startSweeper() {
         this.sweeperTimer = setInterval(() => {
@@ -96,14 +96,17 @@ class DurableQueue {
         }, this.sweepInterval);
     }
 
+    // === Public API ===
+
     async enqueue(job) {
         if (this._recoverPromise) {
             await this._recoverPromise;
             this._recoverPromise = null;
+            this.recovered = true;
         }
 
         if (!job.id) {
-            throw new Error(`Job must have an id property (exchange-contract)`);
+            throw new Error('Job must have an id property');
         }
 
         this.queue._pushBack(job);
@@ -122,6 +125,7 @@ class DurableQueue {
         if (this._recoverPromise) {
             await this._recoverPromise;
             this._recoverPromise = null;
+            this.recovered = true;
         }
 
         const job = this.queue.popFront();
@@ -196,6 +200,8 @@ class DurableQueue {
         return true;
     }
 
+    // === Recovery ===
+
     async recover() {
         try {
             if (this.commWorker && typeof this.commWorker.sendRequest === 'function') {
@@ -218,16 +224,21 @@ class DurableQueue {
                     console.log(`[DurableQueue:${this.name}] 🔄 Recovered ${this.queue.getSize()} jobs`);
                 }
 
+                this.recovered = true;
                 return this.queue.getSize();
             }
 
             console.warn(`[DurableQueue:${this.name}] ⚠️ No commWorker available`);
+            this.recovered = true;
             return 0;
         } catch (error) {
             console.error(`[DurableQueue:${this.name}] Recovery failed:`, error.message);
+            this.recovered = true;
             return 0;
         }
     }
+
+    // === Stats ===
 
     getStats() {
         return {
@@ -238,7 +249,8 @@ class DurableQueue {
             writeQueueSize: this.writeQueue.size(),
             visibilityTimeout: this.visibilityTimeout,
             maxRetries: this.maxRetries,
-            stats: this.stats
+            stats: this.stats,
+            recovered: this.recovered
         };
     }
 

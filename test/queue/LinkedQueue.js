@@ -1,5 +1,5 @@
 // queue/LinkedQueue.js
-const Node = require("./Node");
+const Node = require('./Node');
 
 class LinkedQueue {
     constructor(name) {

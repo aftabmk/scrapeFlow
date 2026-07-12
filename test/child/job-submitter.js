@@ -3,12 +3,11 @@ const BaseChildProcess = require('./base');
 
 class JobSubmitterProcess extends BaseChildProcess {
     constructor(options = {}) {
-        // ✅ Set processingWorkers to 5 for parallel submission
         const opts = {
             ...options,
             processType: 'job-submitter',
             queueName: options.queueName || 'job_submitter_queue',
-            processingWorkers: 5
+            processingWorkers: 5  // 5 workers for parallel submission
         };
         
         super(opts);
@@ -28,7 +27,7 @@ class JobSubmitterProcess extends BaseChildProcess {
         console.log(`[JobSubmitter] 📨 PID: ${process.pid}`);
     }
 
-    // === Override _setupIPCListener to handle START_SUBMITTING ===
+    // === Override _setupIPCListener ===
 
     _setupIPCListener() {
         console.log(`[JobSubmitter] 📨 Setting up IPC listener...`);
@@ -102,7 +101,6 @@ class JobSubmitterProcess extends BaseChildProcess {
                 } catch (error) {
                     console.error(`[JobSubmitter] ❌ Worker ${workerId} failed submission for ${job.id}:`, error.message);
                     
-                    // Send failure
                     process.send({
                         type: 'JOB_FAILED',
                         jobId: job.id,
@@ -132,20 +130,20 @@ class JobSubmitterProcess extends BaseChildProcess {
             throw new Error('No event data in job');
         }
 
-        // ✅ Validate EXCHANGE and CONTRACT
+        // Validate EXCHANGE and CONTRACT
         if (!eventData.EXCHANGE || !eventData.CONTRACT) {
             console.log(`[JobSubmitter] ❌ Event missing EXCHANGE or CONTRACT, skipping...`);
             throw new Error('Missing EXCHANGE or CONTRACT');
         }
 
-        // ✅ Create ID: exchange-contract
+        // Create ID: exchange-contract
         const jobId = `${eventData.EXCHANGE}-${eventData.CONTRACT}`;
         
         console.log(`[JobSubmitter] 📤 Submitting event ${jobNumber}/${totalJobs}: ${jobId}`);
         console.log(`[JobSubmitter]   EXCHANGE: ${eventData.EXCHANGE}`);
         console.log(`[JobSubmitter]   CONTRACT: ${eventData.CONTRACT}`);
         
-        // ✅ Build job for orchestrator
+        // Build job for orchestrator
         const submitJob = {
             id: jobId,
             type: 'analyzer',
@@ -167,7 +165,7 @@ class JobSubmitterProcess extends BaseChildProcess {
             }
         };
         
-        // ✅ Send SUBMIT_JOB to orchestrator
+        // Send SUBMIT_JOB to orchestrator
         if (process.send) {
             process.send({
                 type: 'SUBMIT_JOB',
@@ -206,7 +204,7 @@ class JobSubmitterProcess extends BaseChildProcess {
         console.log(`[JobSubmitter] ⏱️ Interval: ${this.submitState.submitInterval}ms`);
         console.log(`[JobSubmitter] 📋 Events count: ${this.submitState.events.length}`);
         
-        // ✅ Send started event
+        // Send started event
         if (process.send) {
             process.send({
                 type: 'SUBMITTER_STARTED',
@@ -216,10 +214,10 @@ class JobSubmitterProcess extends BaseChildProcess {
             });
         }
 
-        // ✅ Submit first batch of events
+        // Submit first batch of events
         await this._submitNextBatch();
         
-        // ✅ Start interval for subsequent batches
+        // Start interval for subsequent batches
         this.submitState.submitTimer = setInterval(async () => {
             if (this.submitState.jobsSubmitted >= this.submitState.maxJobs || !this.isRunning) {
                 clearInterval(this.submitState.submitTimer);
@@ -241,7 +239,7 @@ class JobSubmitterProcess extends BaseChildProcess {
     // === Submit Next Batch ===
 
     async _submitNextBatch() {
-        // ✅ Submit up to batchSize events at a time (one per worker)
+        // Submit up to batchSize events at a time (one per worker)
         const batchSize = Math.min(this.submitState.batchSize, this.submitState.maxJobs - this.submitState.jobsSubmitted);
         const batch = [];
         
@@ -251,7 +249,7 @@ class JobSubmitterProcess extends BaseChildProcess {
             const eventData = this.submitState.events[this.submitState.currentEventIndex];
             const jobNumber = this.submitState.jobsSubmitted + 1;
             
-            // ✅ Validate event
+            // Validate event
             if (!eventData.EXCHANGE || !eventData.CONTRACT) {
                 console.log(`[JobSubmitter] ❌ Event ${jobNumber} missing EXCHANGE or CONTRACT, skipping...`);
                 this.submitState.jobsSubmitted++;
@@ -259,7 +257,7 @@ class JobSubmitterProcess extends BaseChildProcess {
                 continue;
             }
             
-            // ✅ Create job for worker
+            // Create job for worker
             const jobId = `${eventData.EXCHANGE}-${eventData.CONTRACT}`;
             const job = {
                 id: jobId,
@@ -270,7 +268,7 @@ class JobSubmitterProcess extends BaseChildProcess {
                 }
             };
             
-            // ✅ Enqueue to durable queue (workers will pick up)
+            // Enqueue to durable queue (workers will pick up)
             await this.queue.enqueue(job);
             
             batch.push({ eventData, jobNumber, jobId });

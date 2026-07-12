@@ -1,217 +1,231 @@
 // parent/orchestrator.js
 const { EventEmitter } = require('events');
-const ProcessManager = require('./components/process-manager');
-const MessageRouter = require('./components/message-router');
-const JobRouter = require('./components/job-router');
-const HealthMonitor = require('./components/health-monitor');
+const ProcessCreator = require('./components/process-creator');
 const SQLiteServerManager = require('./components/sqlite-server-manager');
 
 class Orchestrator extends EventEmitter {
     constructor(options = {}) {
         super();
+        
         this.isRunning = true;
         this.allProcessesReady = false;
+        this.serverReady = false;
+        this.readyChildren = 0;
+        this.aliveChildren = 0;
+        this.expectedChildren = 0;
+        this.pendingSubmissions = [];
+        this.isProcessingSubmission = false;
+        this.heartbeatTimeout = options.heartbeatTimeout || 15000;
         this.options = options;
 
-        // ✅ Initialize components
-        this.processManager = new ProcessManager({
-            restartDelay: options.restartDelay || 2000
-        });
-
-        this.jobRouter = new JobRouter({
-            processManager: this.processManager,
-            pipeline: options.pipeline || ['analyzer', 'browser', 'exporter']
-        });
-
-        this.healthMonitor = new HealthMonitor({
-            processManager: this.processManager,
-            heartbeatTimeout: options.heartbeatTimeout || 15000,
-            checkInterval: options.healthCheckInterval || 2000,
-            onRestart: (info) => {
-                this.processManager.restartProcess(info);
-            }
-        });
-
+        // ✅ SQLite Server Manager
         this.sqliteManager = new SQLiteServerManager({
             dbPath: options.dbPath || './data/queue.db',
             readWorkers: options.readWorkers || 3,
             writeWorkers: options.writeWorkers || 1,
-            startTimeout: options.sqliteTimeout || 30000,
+            startTimeout: options.sqliteTimeout || 10000,
             restartDelay: options.restartDelay || 2000,
-            maxAttempts: options.sqliteMaxAttempts || 3
+            queueNames: options.queueNames || ['analyzer', 'browser', 'exporter', 'job-submitter']
         });
 
-        this.messageRouter = new MessageRouter();
+        // ✅ Process Creator
+        this.processCreator = new ProcessCreator({
+            restartDelay: options.restartDelay || 2000
+        });
 
-        // ✅ Setup job router submit function
-        this.jobRouter.setSubmitJobFn((job) => this.submitJob(job));
-
-        // ✅ Setup message handlers
-        this._setupMessageHandlers();
-        this._setupEventListeners();
+        // ✅ Setup listeners
+        this._setupSQLiteListeners();
+        this._setupProcessCreatorListeners();
+        this._startHeartbeatMonitor();
     }
 
-    // === Setup Message Handlers ===
-    // parent/orchestrator.js - Updated message handler registration
+    // === SQLite Server Listeners ===
 
-    _setupMessageHandlers() {
-        // Register handlers for each message type
-        this.messageRouter
-            .register('HEARTBEAT', (msg, processInfo) => {
-                this.healthMonitor.updateHeartbeat(processInfo.pid, msg.stats);
-                this.emit('heartbeat', { pid: processInfo.pid, stats: msg.stats });
-            })
-            .register('JOB_QUEUED', (msg, processInfo) => {
-                console.log(`[Orchestrator] 📝 Job ${msg.jobId} queued in ${processInfo.type}`);
-                this.emit('jobQueued', { pid: processInfo.pid, jobId: msg.jobId });
-            })
-            .register('JOB_COMPLETE', (msg, processInfo) => {
-                console.log(`[Orchestrator] ✅ Job ${msg.jobId} completed in ${processInfo.type}`);
-                msg.processType = processInfo.type;
-                this.jobRouter.routeToNext(msg);
-                this.emit('jobComplete', { pid: processInfo.pid, jobId: msg.jobId, result: msg.result });
-            })
+    _setupSQLiteListeners() {
+        this.sqliteManager.on('ready', (info) => {
+            console.log('[Orchestrator] ✅ SQLite Server ready');
+        });
 
-            .register('JOB_FAILED', (msg, processInfo) => {
-                console.log(`[Orchestrator] ❌ Job ${msg.jobId} failed in ${processInfo.type}: ${msg.error}`);
-                this.emit('jobFailed', { pid: processInfo.pid, jobId: msg.jobId, error: msg.error });
-            })
-            .register('SUBMIT_JOB', (msg, processInfo) => {
-                console.log(`[Orchestrator] 📨 Received SUBMIT_JOB from ${processInfo.type}`);
-                this.jobRouter.handleJobSubmission(msg);
-            })
-            .register('SUBMITTER_STARTED', (msg, processInfo) => {
-                console.log(`[Orchestrator] 📤 Job submitter started: ${msg.maxJobs} jobs`);
-                this.emit('submitterStarted', msg);
-            })
-            .register('SUBMITTER_COMPLETE', (msg, processInfo) => {
-                console.log(`[Orchestrator] ✅ Job submitter completed: ${msg.totalJobs} jobs`);
-                this.emit('submitterComplete', msg);
-            })
-            .register('SQLITE_REQUEST', (msg, processInfo) => {
-                // ✅ Fix: isRunning is a method, not a property
-                if (this.sqliteManager.isRunning()) {
-                    console.log(`[Orchestrator] 🔄 Forwarding SQLITE_REQUEST to SQLite Server`);
-                    this.sqliteManager.send(msg.data);
-                } else {
-                    console.error('[Orchestrator] ❌ SQLite Server not available for request');
-                    // Send error response back to child
-                    if (msg.data && msg.data.jobId && msg.data.sourcePid) {
-                        const errorResponse = {
-                            type: 'SQLITE_RESPONSE',
-                            targetPid: msg.data.sourcePid,
-                            jobId: msg.data.jobId,
-                            error: 'SQLite Server not available'
-                        };
-                        this.processManager.sendMessage(msg.data.sourcePid, errorResponse);
-                    }
-                }
-            })
-            .register('SQLITE_RESPONSE', (msg, processInfo) => {
-                const { targetPid, ...response } = msg;
-                if (targetPid) {
-                    this.processManager.sendMessage(targetPid, response);
-                }
-            })
-            .register('STATUS', (msg, processInfo) => {
-                this.emit('status', { pid: processInfo.pid, ...msg });
-            })
-            .register('SHUTDOWN_COMPLETE', (msg, processInfo) => {
-                processInfo.status = 'stopped';
-                this.emit('shutdownComplete', { pid: processInfo.pid });
-            })
-            .setDefaultHandler((msg, processInfo) => {
-                console.log(`[Orchestrator] 📨 Unhandled message type: ${msg.type} from ${processInfo.type}`);
-                this.emit('unhandledMessage', { pid: processInfo.pid, message: msg });
-            });
+        this.sqliteManager.on('allTablesCreated', () => {
+            console.log('[Orchestrator] 🎯 All SQLite tables created');
+            this.serverReady = true;
+            this._checkAllReady();
+        });
+
+        this.sqliteManager.on('shutdown', () => {
+            console.log('[Orchestrator] SQLite Server shutdown');
+        });
     }
 
-    // === Setup Event Listeners ===
+    // === ProcessCreator Listeners ===
 
-    _setupEventListeners() {
-        // ProcessManager events
-        this.processManager.on('processReady', (data) => {
+    _setupProcessCreatorListeners() {
+        this.processCreator.on('processReady', (data) => {
+            // Child sent ALIVE (normal startup, no recover)
+            console.log(`[Orchestrator] ✅ Process ${data.pid} (${data.type}) alive`);
+            this.aliveChildren++;
             this.emit('processReady', data);
             this._checkAllReady();
         });
 
-        this.processManager.on('processTimeout', (data) => {
+        this.processCreator.on('processReadyAfterRecover', (data) => {
+            // Child sent READY (after recover)
+            console.log(`[Orchestrator] ✅ Process ${data.pid} (${data.type}) ready after recover`);
+            this.readyChildren++;
+            this.emit('processReadyAfterRecover', data);
+            this._checkAllReady();
+        });
+
+        this.processCreator.on('processTimeout', (data) => {
             this.emit('processTimeout', data);
         });
 
-        this.processManager.on('exit', (processInfo, code, signal) => {
+        this.processCreator.on('exit', (processInfo, code, signal) => {
             console.log(`[Orchestrator] ⚠️ Process ${processInfo.pid} (${processInfo.type}) exited with code ${code}`);
-            this.emit('processExit', { pid: processInfo.pid, type: processInfo.type, code, signal });
+            this.aliveChildren--;
+            this.readyChildren--;
             this.allProcessesReady = false;
+            this.emit('processExit', { pid: processInfo.pid, type: processInfo.type, code, signal });
         });
 
-        this.processManager.on('message', (processInfo, message) => {
-            this.messageRouter.route(message, processInfo);
-        });
-
-        // HealthMonitor events
-        this.healthMonitor.on('heartbeat', (data) => {
-            this.emit('healthHeartbeat', data);
-        });
-
-        this.healthMonitor.on('missed', (data) => {
-            this.emit('healthMissed', data);
-        });
-
-        // SQLiteManager events
-        this.sqliteManager.on('ready', (info) => {
-            console.log('[Orchestrator] ✅ SQLite Server ready');
-            this.emit('sqliteReady', info);
-        });
-
-        this.sqliteManager.on('maxAttemptsReached', (data) => {
-            console.error('[Orchestrator] ❌ SQLite Server max restart attempts reached');
-            this.emit('sqliteMaxAttempts', data);
-        });
-
-        // JobRouter events
-        this.jobRouter.on('jobComplete', (data) => {
-            console.log(`[Orchestrator] 🎉 Job ${data.jobId} fully completed!`);
-            this.emit('jobFullyComplete', data);
-        });
-
-        this.jobRouter.on('submitted', (data) => {
-            this.emit('jobSubmitted', data);
-        });
-
-        this.jobRouter.on('error', (data) => {
-            this.emit('jobSubmissionError', data);
+        this.processCreator.on('message', (processInfo, message) => {
+            this._handleChildMessage(processInfo, message);
         });
     }
 
-    // === Public API ===
+    // === Start SQLite Server ===
 
     async startSQLiteServer(options = {}) {
-        if (options.dbPath) this.sqliteManager.dbPath = options.dbPath;
-        if (options.readWorkers) this.sqliteManager.readWorkers = options.readWorkers;
-        if (options.writeWorkers) this.sqliteManager.writeWorkers = options.writeWorkers;
         return this.sqliteManager.start();
     }
 
-    async createProcess(options) {
-        return this.processManager.createProcess(options);
+    // === Process Creation ===
+
+    async createProcess(options = {}) {
+        const { type } = options;
+        this.expectedChildren++;
+        
+        // ✅ Pass serverReady flag to child
+        const processInfo = await this.processCreator.createProcess({
+            ...options,
+            serverReady: this.serverReady
+        });
+
+        return processInfo;
     }
+
+    async createAllProcesses(processConfigs) {
+        const promises = processConfigs.map(config => this.createProcess(config));
+        return Promise.all(promises);
+    }
+
+    // === Check All Ready ===
+
+    _checkAllReady() {
+        // ✅ All children are alive (sent ALIVE)
+        const allAlive = this.aliveChildren === this.expectedChildren && this.expectedChildren > 0;
+        
+        // ✅ Server is ready (all tables created)
+        const serverReady = this.serverReady;
+        
+        // ✅ All children are ready (sent READY after recover)
+        const allReady = this.readyChildren === this.expectedChildren && this.expectedChildren > 0;
+
+        if (allAlive && serverReady && allReady && !this.allProcessesReady) {
+            this.allProcessesReady = true;
+            console.log('[Orchestrator] 🎯 All processes are ready!');
+            this.emit('allProcessesReady');
+        }
+    }
+
+    // === Message Handling ===
+
+    _handleChildMessage(processInfo, message) {
+        if (!message || !message.type) return;
+
+        switch (message.type) {
+            case 'HEARTBEAT':
+                processInfo.lastHeartbeat = Date.now();
+                this.emit('heartbeat', { pid: processInfo.pid, stats: message.stats });
+                break;
+
+            case 'JOB_QUEUED':
+                console.log(`[Orchestrator] 📝 Job ${message.jobId} queued in ${processInfo.type}`);
+                this.emit('jobQueued', { pid: processInfo.pid, jobId: message.jobId });
+                break;
+
+            case 'JOB_COMPLETE':
+                console.log(`[Orchestrator] ✅ Job ${message.jobId} completed in ${processInfo.type}`);
+                this._routeToNextStage(message);
+                this.emit('jobComplete', { pid: processInfo.pid, jobId: message.jobId, result: message.result });
+                break;
+
+            case 'JOB_FAILED':
+                console.log(`[Orchestrator] ❌ Job ${message.jobId} failed in ${processInfo.type}: ${message.error}`);
+                this.emit('jobFailed', { pid: processInfo.pid, jobId: message.jobId, error: message.error });
+                break;
+
+            case 'SUBMIT_JOB':
+                console.log(`[Orchestrator] 📨 Received SUBMIT_JOB from ${processInfo.type}`);
+                this._handleJobSubmission(message);
+                break;
+
+            case 'SUBMITTER_STARTED':
+                console.log(`[Orchestrator] 📤 Job submitter started: ${message.maxJobs} jobs`);
+                this.emit('submitterStarted', message);
+                break;
+
+            case 'SUBMITTER_COMPLETE':
+                console.log(`[Orchestrator] ✅ Job submitter completed: ${message.totalJobs} jobs`);
+                this.emit('submitterComplete', message);
+                break;
+
+            case 'SQLITE_REQUEST':
+                if (this.sqliteManager.isRunning()) {
+                    this.sqliteManager.send(message.data);
+                } else {
+                    console.error('[Orchestrator] ❌ SQLite Server not available');
+                }
+                break;
+
+            case 'SQLITE_RESPONSE':
+                const { targetPid, ...response } = message;
+                if (targetPid) {
+                    this.processCreator.sendMessage(targetPid, response);
+                }
+                break;
+
+            case 'STATUS':
+                this.emit('status', { pid: processInfo.pid, ...message });
+                break;
+
+            case 'SHUTDOWN_COMPLETE':
+                processInfo.status = 'stopped';
+                this.emit('shutdownComplete', { pid: processInfo.pid });
+                break;
+
+            default:
+                this.emit('message', { pid: processInfo.pid, message });
+        }
+    }
+
+    // === Job Submission ===
 
     async submitJob(jobData) {
         const { type = 'browser', data, id } = jobData;
-
-        const processInfo = await this.processManager.waitForProcess(type);
+        
+        const processInfo = await this.processCreator.waitForProcess(type);
         if (!processInfo) {
             throw new Error(`No running process of type: ${type} available`);
         }
-
+        
         const jobId = id || data?.id || `${type}_${Date.now()}`;
-
+        
         return new Promise((resolve, reject) => {
             const timeout = setTimeout(() => {
                 reject(new Error('Job submission timeout'));
             }, 10000);
-
+            
             const listener = (msg) => {
                 if (msg.type === 'JOB_QUEUED' && msg.jobId === jobId) {
                     clearTimeout(timeout);
@@ -224,7 +238,7 @@ class Orchestrator extends EventEmitter {
                     reject(new Error(msg.error));
                 }
             };
-
+            
             processInfo.child.on('message', listener);
             processInfo.child.send({
                 type: 'NEW_JOB',
@@ -234,29 +248,190 @@ class Orchestrator extends EventEmitter {
         });
     }
 
+    // === Handle Job Submission ===
+
+    async _handleJobSubmission(message) {
+        const { job, jobNumber, totalJobs, eventData } = message;
+        
+        if (this.isProcessingSubmission) {
+            this.pendingSubmissions.push(message);
+            return;
+        }
+        
+        this.isProcessingSubmission = true;
+        
+        try {
+            const analyzerProcess = await this.processCreator.waitForProcess('analyzer');
+            if (!analyzerProcess) {
+                console.error(`[Orchestrator] ❌ Analyzer not available for job ${jobNumber}`);
+                this.emit('jobSubmissionError', { jobNumber, error: 'Analyzer not available' });
+                return;
+            }
+            
+            console.log(`[Orchestrator] 📤 Submitting job ${jobNumber}/${totalJobs}: ${job.id}`);
+            if (eventData) {
+                console.log(`[Orchestrator] 📋 ${eventData.EXCHANGE} - ${eventData.CONTRACT}`);
+            }
+            
+            const result = await this.submitJob(job);
+            console.log(`[Orchestrator] ✅ Job ${result.jobId} submitted (${jobNumber}/${totalJobs})`);
+            this.emit('jobSubmitted', { jobNumber, totalJobs, jobId: result.jobId, eventData });
+            
+        } catch (error) {
+            console.error(`[Orchestrator] ❌ Job ${jobNumber} failed:`, error.message);
+            this.emit('jobSubmissionError', { jobNumber, error: error.message });
+        } finally {
+            this.isProcessingSubmission = false;
+            this._processNextPending();
+        }
+    }
+
+    _processNextPending() {
+        if (this.pendingSubmissions.length > 0 && !this.isProcessingSubmission) {
+            const next = this.pendingSubmissions.shift();
+            this._handleJobSubmission(next);
+        }
+    }
+
+    // === Route to Next Stage ===
+
+    async _routeToNextStage(message) {
+        const result = message.result;
+        const currentType = message.processType || 'unknown';
+        const jobId = message.jobId;
+        
+        // Map: current stage → next stage
+        const stageMap = {
+            'analyzer': 'browser',
+            'browser': 'exporter',
+            'exporter': null  // End of pipeline
+        };
+        
+        // Special case: job-submitter → analyzer
+        if (currentType === 'job-submitter' || currentType === 'submitter') {
+            await this._routeToAnalyzer(message, result);
+            return;
+        }
+        
+        const nextType = stageMap[currentType];
+        
+        if (!nextType) {
+            // Job completed all stages
+            console.log(`[Orchestrator] 🎉 Job ${jobId} fully completed!`);
+            this.emit('jobFullyComplete', { jobId, result });
+            return;
+        }
+
+        console.log(`[Orchestrator] 🔄 Routing ${jobId} from ${currentType} to ${nextType}`);
+
+        const nextJob = this._buildJobForStage(nextType, message, result);
+        
+        try {
+            await this.submitJob(nextJob);
+            console.log(`[Orchestrator] ✅ ${nextType} job created for ${jobId}`);
+        } catch (error) {
+            console.error(`[Orchestrator] ❌ Failed to route to ${nextType}:`, error.message);
+        }
+    }
+
+    async _routeToAnalyzer(message, result) {
+        const jobId = message.jobId;
+        console.log(`[Orchestrator] 📤 Creating analyzer job for ${jobId}`);
+
+        const analyzerJob = {
+            id: jobId,
+            type: 'analyzer',
+            data: {
+                id: jobId,
+                event: result.event || {},
+                exchange: result.exchange,
+                contract: result.contract,
+                pageUrl: result.pageUrl,
+                apiUrl: result.apiUrl,
+                apiUrlBuilder: result.apiUrlBuilder,
+                referer: result.referer,
+                metadata: result.metadata || {},
+                submittedAt: result.submittedAt || new Date().toISOString()
+            }
+        };
+
+        try {
+            await this.submitJob(analyzerJob);
+            console.log(`[Orchestrator] ✅ Analyzer job created for ${jobId}`);
+        } catch (error) {
+            console.error(`[Orchestrator] ❌ Failed to create analyzer job:`, error.message);
+        }
+    }
+
+    _buildJobForStage(stage, message, result) {
+        const jobId = message.jobId;
+        
+        switch (stage) {
+            case 'browser':
+                return {
+                    id: jobId,
+                    type: 'browser',
+                    data: {
+                        id: jobId,
+                        event: result.event || {},
+                        exchange: result.exchange,
+                        contract: result.contract,
+                        pageUrl: result.pageUrl,
+                        apiUrl: result.apiUrl,
+                        apiUrlBuilder: result.apiUrlBuilder,
+                        referer: result.referer,
+                        analysisJobId: message.jobId,
+                        analyzedAt: result.analyzedAt,
+                        metadata: result.metadata || {}
+                    }
+                };
+            case 'exporter':
+                return {
+                    id: jobId,
+                    type: 'exporter',
+                    data: {
+                        id: jobId,
+                        event: result.event || {},
+                        exchange: result.exchange,
+                        contract: result.contract,
+                        pageUrl: result.pageUrl,
+                        apiUrl: result.apiUrl,
+                        referer: result.referer,
+                        browserJobId: message.jobId,
+                        scrapedAt: result.scrapedAt || new Date().toISOString(),
+                        metadata: result.metadata || {}
+                    }
+                };
+            default:
+                throw new Error(`Unknown stage: ${stage}`);
+        }
+    }
+
+    // === Start Job Submitter ===
+
     async startJobSubmitter(config = {}) {
         console.log('[Orchestrator] 🚀 Starting job submitter...');
         console.log(`[Orchestrator] 📋 Events: ${config.events?.length || 0}`);
-
+        
         let submitterProcess = null;
         let attempts = 0;
         const maxAttempts = 5;
-
+        
         while (attempts < maxAttempts) {
-            submitterProcess = await this.processManager.waitForProcess('job-submitter', 5000);
+            submitterProcess = await this.processCreator.waitForProcess('job-submitter', 5000);
             if (submitterProcess) break;
             attempts++;
             console.log(`[Orchestrator] ⏳ Waiting for job-submitter (attempt ${attempts}/${maxAttempts})...`);
             await this._sleep(2000);
         }
-
+        
         if (!submitterProcess) {
             console.error('[Orchestrator] ❌ Job submitter process not found!');
             return;
         }
-
+        
         console.log(`[Orchestrator] 📨 Found job-submitter process: ${submitterProcess.pid}`);
-
+        
         const message = {
             type: 'START_SUBMITTING',
             parentPid: process.pid,
@@ -266,7 +441,7 @@ class Orchestrator extends EventEmitter {
                 events: config.events || []
             }
         };
-
+        
         try {
             submitterProcess.child.send(message);
             console.log('[Orchestrator] ✅ Start signal sent successfully');
@@ -275,9 +450,35 @@ class Orchestrator extends EventEmitter {
         }
     }
 
+    // === Heartbeat Monitor ===
+
+    _startHeartbeatMonitor() {
+        setInterval(() => {
+            const now = Date.now();
+            const processes = this.processCreator.getAllProcesses();
+            
+            for (const info of processes) {
+                if (info.status === 'running') {
+                    const elapsed = now - info.lastHeartbeat;
+                    
+                    if (elapsed > this.heartbeatTimeout) {
+                        console.warn(`[Orchestrator] ⏰ Process ${info.pid} heartbeat timeout (${elapsed}ms)`);
+                        this.emit('heartbeatTimeout', { pid: info.pid, info });
+                        
+                        if (this.isRunning) {
+                            this.processCreator.restartProcess(info);
+                        }
+                    }
+                }
+            }
+        }, 2000);
+    }
+
+    // === Stats ===
+
     async getProcessStats() {
         const stats = {};
-        const processes = this.processManager.getAllProcesses();
+        const processes = this.processCreator.getAllProcesses();
         for (const info of processes) {
             stats[info.pid] = {
                 type: info.type,
@@ -294,27 +495,15 @@ class Orchestrator extends EventEmitter {
         return stats;
     }
 
-    async getHealthStatus() {
-        return this.healthMonitor.getHealthStatus();
-    }
-
-    _checkAllReady() {
-        if (this.allProcessesReady) return;
-        if (this.processManager.isAllReady()) {
-            this.allProcessesReady = true;
-            console.log('[Orchestrator] 🎯 All processes are ready!');
-            this.emit('allProcessesReady');
-        }
-    }
+    // === Shutdown ===
 
     async shutdown() {
         console.log('[Orchestrator] 🛑 Shutting down...');
         this.isRunning = false;
-
-        this.healthMonitor.stop();
-        await this.processManager.shutdown();
+        
+        await this.processCreator.shutdown();
         await this.sqliteManager.shutdown();
-
+        
         console.log('[Orchestrator] ✅ Shutdown complete');
         this.emit('shutdown');
     }

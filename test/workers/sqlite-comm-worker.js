@@ -1,5 +1,4 @@
 // workers/sqlite-comm-worker.js
-// ✅ ONLY handles IPC communication - NO SQLite queries
 const { EventEmitter } = require('events');
 
 class SQLiteCommWorker extends EventEmitter {
@@ -50,11 +49,13 @@ class SQLiteCommWorker extends EventEmitter {
         }
     }
 
-    // === Send Request to SQLite Server ===
+    // === Public API ===
 
     async sendRequest(op, data = {}) {
         return this._sendRequest(op, data);
     }
+
+    // === Private Request ===
 
     _sendRequest(op, data = {}) {
         return new Promise((resolve, reject) => {
@@ -106,7 +107,7 @@ class SQLiteCommWorker extends EventEmitter {
         });
     }
 
-    // === Processing Loop (Batch Operations) ===
+    // === Processing Loop ===
 
     async _startProcessing() {
         while (this.isRunning) {
@@ -186,7 +187,7 @@ class SQLiteCommWorker extends EventEmitter {
         }
     }
 
-    // === Operation Senders (Send to SQLite Server) ===
+    // === Operation Processors ===
 
     async _processAppends(ops) {
         for (const op of ops) {
@@ -236,6 +237,8 @@ class SQLiteCommWorker extends EventEmitter {
     _sleep(ms) {
         return new Promise(resolve => setTimeout(resolve, ms));
     }
+
+    // === Shutdown ===
 
     shutdown() {
         this.isRunning = false;

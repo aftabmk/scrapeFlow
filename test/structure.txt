@@ -1,0 +1,43 @@
+project/
+├── index.js                          # Main entry point
+├── test.js                           # ✅ Performance test file
+├── main.js                           # Application class
+├── config.js                         # Configuration
+├── event.json                        # Event data
+├── .env                              # Environment variables
+├── .env.example                      # Environment template
+├── performance/
+│   ├── performance-monitor.js        # ✅ Performance monitoring class
+│   └── metrics/                      # ✅ Output folder for metrics
+│       ├── perf-report.json          # Performance report
+│       ├── cpu-profile.cpuprofile    # CPU profile
+│       ├── heap-profile.heapprofile  # Heap profile
+│       └── trace.json                # Trace data
+├── parent/
+│   ├── orchestrator.js
+│   └── components/
+│       ├── process-creator.js
+│       └── sqlite-server-manager.js
+├── sqlite-server/
+│   ├── index.js
+│   ├── server.js
+│   ├── sql-queries.js
+│   └── workers/
+│       ├── write-worker.js
+│       └── read-worker.js
+├── child/
+│   ├── base.js
+│   ├── analyzer.js
+│   ├── browser.js
+│   ├── exporter.js
+│   └── job-submitter.js
+├── queue/
+│   ├── durable-queue.js
+│   ├── write-queue.js
+│   ├── linked-queue.js
+│   └── node.js
+├── workers/
+│   ├── sqlite-comm-worker.js
+│   └── processing-worker.js
+└── utils/
+    └── logger.js

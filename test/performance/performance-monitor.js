@@ -1,7 +1,8 @@
-// utils/performance-monitor.js
+// performance/performance-monitor.js
 const { performance } = require('perf_hooks');
 const v8 = require('v8');
 const fs = require('fs');
+const path = require('path');
 const { fork } = require('child_process');
 
 // ============================================================
@@ -16,7 +17,8 @@ const DEFAULT_CONFIG = {
     eventLoopThreshold: 50,
     cpuThreshold: 80,
     maxSamples: 1000,
-    outputFile: './perf-report.json',
+    outputDir: './performance/metrics',
+    outputFile: 'perf-report.json',
     logToFile: true,
     logToConsole: true
 };
@@ -29,6 +31,9 @@ class PerformanceMonitor {
     constructor(config = {}) {
         this.config = { ...DEFAULT_CONFIG, ...config };
         this.enabled = this.config.enabled;
+
+        // ✅ Create output directory
+        this._ensureOutputDir();
 
         // Metrics storage
         this.metrics = new Map();
@@ -88,6 +93,22 @@ class PerformanceMonitor {
     }
 
     // ============================================================
+    // DIRECTORY MANAGEMENT
+    // ============================================================
+
+    _ensureOutputDir() {
+        const dir = this.config.outputDir;
+        if (!fs.existsSync(dir)) {
+            fs.mkdirSync(dir, { recursive: true });
+            console.log(`📊 Created metrics directory: ${dir}`);
+        }
+    }
+
+    _getOutputPath(filename) {
+        return path.join(this.config.outputDir, filename);
+    }
+
+    // ============================================================
     // HEADER
     // ============================================================
 
@@ -100,6 +121,7 @@ class PerformanceMonitor {
         console.log(`📊 Event Loop Threshold: ${this.config.eventLoopThreshold}ms`);
         console.log(`📊 CPU Threshold: ${this.config.cpuThreshold}%`);
         console.log(`📊 Log Interval: ${this.config.logInterval}ms`);
+        console.log(`📊 Output Directory: ${this.config.outputDir}`);
         console.log('📊 ==================================\n');
     }
 
@@ -381,7 +403,6 @@ class PerformanceMonitor {
             }
         };
 
-        // ✅ Track received messages
         const originalOn = process.on;
         process.on = function(event, listener) {
             if (event === 'message') {
@@ -404,7 +425,6 @@ class PerformanceMonitor {
         const perf = this;
         const originalFork = fork;
 
-        // Patch the fork function
         const childProcess = require('child_process');
         childProcess.fork = function(modulePath, args, options) {
             const id = perf.start('Process.fork', { module: modulePath });
@@ -516,8 +536,9 @@ class PerformanceMonitor {
             platform: process.platform
         };
 
-        fs.writeFileSync(this.config.outputFile, JSON.stringify(report, null, 2));
-        console.log(`📊 Report written to: ${this.config.outputFile}`);
+        const outputPath = this._getOutputPath(this.config.outputFile);
+        fs.writeFileSync(outputPath, JSON.stringify(report, null, 2));
+        console.log(`📊 Report written to: ${outputPath}`);
     }
 
     // ============================================================

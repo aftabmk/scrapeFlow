@@ -15,7 +15,9 @@ class ExporterChildProcess extends BaseChildProcess {
         
         console.log(`[Exporter] 📤 Exporting: ${data.exchange || 'N/A'} - ${data.contract || 'N/A'}`);
         console.log(`[Exporter] 📋 Job ID: ${job.id}`);
+        console.log(`[Exporter] 📋 URL: ${data.pageUrl || 'N/A'}`);
         
+        // Simulate export work
         await this._sleep(500 + Math.random() * 1000);
         
         return {
@@ -27,7 +29,9 @@ class ExporterChildProcess extends BaseChildProcess {
             apiUrl: data.apiUrl,
             referer: data.referer,
             exported: true,
-            exportedAt: new Date().toISOString()
+            exportedAt: new Date().toISOString(),
+            metadata: data.metadata || {},
+            browserJobId: data.browserJobId
         };
     }
 

@@ -16,7 +16,9 @@ class AnalyzerChildProcess extends BaseChildProcess {
         
         console.log(`[Analyzer] 🔍 Analyzing: ${event.EXCHANGE || 'N/A'} - ${event.CONTRACT || 'N/A'}`);
         console.log(`[Analyzer] 📋 Job ID: ${job.id}`);
+        console.log(`[Analyzer] 📋 URL: ${event.PAGE_URL || 'N/A'}`);
         
+        // Simulate analysis work
         await this._sleep(500 + Math.random() * 1000);
         
         return {
@@ -28,8 +30,9 @@ class AnalyzerChildProcess extends BaseChildProcess {
             contract: event.CONTRACT,
             pageUrl: event.PAGE_URL,
             apiUrl: event.API_URL,
-            apiUrlBuilder: event.API_URL_BUILDER,
-            referer: event.REFERER
+            apiUrlBuilder: event.API_URL_BUILDER || null,
+            referer: event.REFERER,
+            metadata: data.metadata || {}
         };
     }
 

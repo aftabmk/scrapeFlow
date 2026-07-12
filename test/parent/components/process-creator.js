@@ -1,9 +1,9 @@
-// parent/components/process-manager.js
+// parent/components/process-creator.js
 const { fork } = require('child_process');
 const path = require('path');
 const { EventEmitter } = require('events');
 
-class ProcessManager extends EventEmitter {
+class ProcessCreator extends EventEmitter {
     constructor(options = {}) {
         super();
         this.processes = new Map();
@@ -27,18 +27,21 @@ class ProcessManager extends EventEmitter {
             queueName = `${type}_queue`,
             sqliteIndex = 0,
             dbPath = './data/queue.db',
+            serverReady = false,  // ✅ serverReady flag from parent
             args = []
         } = options;
 
         const scriptPath = this.scriptMap[type] || this.scriptMap.browser;
         const fullPath = path.join(__dirname, '../..', scriptPath);
 
+        // ✅ Pass serverReady as command-line arg
         const child = fork(fullPath, [
             `--processing-workers=${processingWorkers}`,
             `--queue-name=${queueName}`,
             `--process-type=${type}`,
             `--sqlite-index=${sqliteIndex}`,
             `--db-path=${dbPath}`,
+            `--server-ready=${serverReady}`,  // ✅ Pass serverReady flag
             ...args
         ], {
             stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
@@ -53,15 +56,32 @@ class ProcessManager extends EventEmitter {
             queueName,
             sqliteIndex,
             dbPath,
+            serverReady,  // ✅ Store serverReady
             lastHeartbeat: Date.now(),
             status: 'starting',
             createdAt: Date.now(),
             restartCount: 0,
-            isReady: false
+            isReady: false,
+            isAlive: false
         };
 
         child.on('message', (msg) => {
             this.emit('message', processInfo, msg);
+            
+            // ✅ Handle ALIVE signal (normal startup, no recover)
+            if (msg.type === 'ALIVE' && msg.processType === type) {
+                processInfo.status = 'running';
+                processInfo.isAlive = true;
+                console.log(`[ProcessCreator] ✅ Process ${child.pid} (${type}) alive (ALIVE)`);
+                this.emit('processReady', { pid: child.pid, type, ...msg });
+            }
+            
+            // ✅ Handle READY signal (after recover)
+            if (msg.type === 'READY' && msg.processType === type) {
+                processInfo.isReady = true;
+                console.log(`[ProcessCreator] ✅ Process ${child.pid} (${type}) ready (READY)`);
+                this.emit('processReadyAfterRecover', { pid: child.pid, type, ...msg });
+            }
         });
 
         child.on('exit', (code, signal) => {
@@ -69,7 +89,7 @@ class ProcessManager extends EventEmitter {
         });
 
         child.on('error', (err) => {
-            console.error(`[ProcessManager] Child ${child.pid} error:`, err);
+            console.error(`[ProcessCreator] Child ${child.pid} error:`, err);
             this.emit('exit', processInfo, -1, 'error');
         });
 
@@ -77,28 +97,26 @@ class ProcessManager extends EventEmitter {
         this.expectedProcesses++;
 
         return new Promise((resolve) => {
-            const readyHandler = (msg) => {
-                if (msg.type === 'ready' && msg.processType === type) {
-                    processInfo.status = 'running';
-                    processInfo.isReady = true;
-                    this.readyProcesses++;
-                    
-                    console.log(`[ProcessManager] ✅ Process ${child.pid} (${type}) ready (${this.readyProcesses}/${this.expectedProcesses})`);
-                    this.emit('processReady', { pid: child.pid, type, ...msg });
-                    
-                    this._checkAllProcessesReady();
+            // ✅ Wait for either ALIVE or READY signal (whichever comes first)
+            const handler = (msg) => {
+                if (msg.type === 'ALIVE' && msg.processType === type) {
                     resolve(processInfo);
-                    child.off('message', readyHandler);
+                    child.off('message', handler);
+                }
+                if (msg.type === 'READY' && msg.processType === type) {
+                    resolve(processInfo);
+                    child.off('message', handler);
                 }
             };
             
-            child.on('message', readyHandler);
+            child.on('message', handler);
             
+            // ✅ Timeout for startup
             setTimeout(() => {
-                child.off('message', readyHandler);
+                child.off('message', handler);
                 if (processInfo.status === 'starting') {
                     processInfo.status = 'timeout';
-                    console.warn(`[ProcessManager] Process ${child.pid} (${type}) startup timeout`);
+                    console.warn(`[ProcessCreator] Process ${child.pid} (${type}) startup timeout`);
                     this.emit('processTimeout', { pid: child.pid, type });
                     resolve(processInfo);
                 }
@@ -106,27 +124,13 @@ class ProcessManager extends EventEmitter {
         });
     }
 
-    _checkAllProcessesReady() {
-        if (this.allProcessesReady) return;
-        
-        if (this.readyProcesses === this.expectedProcesses && this.expectedProcesses > 0) {
-            this.allProcessesReady = true;
-            console.log(`[ProcessManager] 🎯 All ${this.expectedProcesses} processes are ready!`);
-            setTimeout(() => {
-                this.emit('allProcessesReady');
-            }, 1000);
-        }
-    }
-
     async restartProcess(processInfo) {
-        const { type, processingWorkers, queueName, sqliteIndex, dbPath } = processInfo;
+        const { type, processingWorkers, queueName, sqliteIndex, dbPath, serverReady } = processInfo;
         
-        console.log(`[ProcessManager] 🔄 Restarting process ${processInfo.pid} (${type})...`);
+        console.log(`[ProcessCreator] 🔄 Restarting process ${processInfo.pid} (${type})...`);
         this.processes.delete(processInfo.pid);
-        this.expectedProcesses--;
-        this.readyProcesses--;
-        this.allProcessesReady = false;
         
+        // ✅ On restart, serverReady should be true (server is already running)
         await this._sleep(this.restartDelay);
         
         const newProcess = await this.createProcess({
@@ -134,10 +138,11 @@ class ProcessManager extends EventEmitter {
             processingWorkers,
             queueName,
             sqliteIndex,
-            dbPath
+            dbPath,
+            serverReady: true  // ✅ Server is already running
         });
         
-        console.log(`[ProcessManager] ✅ Process ${processInfo.pid} restarted as ${newProcess.pid}`);
+        console.log(`[ProcessCreator] ✅ Process ${processInfo.pid} restarted as ${newProcess.pid}`);
         return newProcess;
     }
 
@@ -175,14 +180,6 @@ class ProcessManager extends EventEmitter {
         return this.processes.size;
     }
 
-    getReadyCount() {
-        return this.readyProcesses;
-    }
-
-    isAllReady() {
-        return this.allProcessesReady;
-    }
-
     sendMessage(pid, message) {
         const process = this.processes.get(pid);
         if (process && process.child) {
@@ -190,7 +187,7 @@ class ProcessManager extends EventEmitter {
                 process.child.send(message);
                 return true;
             } catch (error) {
-                console.error(`[ProcessManager] Failed to send message to ${pid}:`, error.message);
+                console.error(`[ProcessCreator] Failed to send message to ${pid}:`, error.message);
                 return false;
             }
         }
@@ -198,7 +195,7 @@ class ProcessManager extends EventEmitter {
     }
 
     async shutdown() {
-        console.log('[ProcessManager] 🛑 Shutting down all processes...');
+        console.log('[ProcessCreator] 🛑 Shutting down all processes...');
         this.isRunning = false;
         
         const promises = [];
@@ -214,10 +211,7 @@ class ProcessManager extends EventEmitter {
         
         await Promise.all(promises);
         this.processes.clear();
-        this.expectedProcesses = 0;
-        this.readyProcesses = 0;
-        this.allProcessesReady = false;
-        console.log('[ProcessManager] ✅ All processes shut down');
+        console.log('[ProcessCreator] ✅ All processes shut down');
         this.emit('shutdown');
     }
 
@@ -226,4 +220,4 @@ class ProcessManager extends EventEmitter {
     }
 }
 
-module.exports = ProcessManager;
+module.exports = ProcessCreator;

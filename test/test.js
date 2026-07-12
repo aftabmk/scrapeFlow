@@ -1,236 +1,271 @@
-// test.js
-const { fork } = require('child_process');
+// test.js - Performance test file
+const { performance } = require('perf_hooks');
 const path = require('path');
-const Orchestrator = require('./parent/orchestrator');
+const fs = require('fs');
+
+// ✅ Import performance monitor
+const perf = require('./performance/performance-monitor');
+
+// ✅ Import application
+const Application = require('./main');
 const eventConfig = require('./event.json');
 
-// ✅ Configuration
-const config = {
-    heartbeatTimeout: 15000,
-    restartDelay: 2000,
-    analyzerWorkers: 2,
-    browserWorkers: 2,
-    exporterWorkers: 1,
-    submitInterval: 3000
+// ============================================================
+// TEST CONFIGURATION
+// ============================================================
+
+const TEST_CONFIG = {
+    iterations: 1,
+    warmup: false,
+    profile: process.env.PROFILE === 'true' || true,
+    outputDir: './performance/metrics',
+    testName: 'application-startup'
 };
 
-class TestHarness {
-    constructor() {
-        this.orchestrator = null;
-        this.sqliteServer = null;
-        this.processes = {
-            analyzer: null,
-            browser: null,
-            exporter: null,
-            'job-submitter': null
-        };
-        this.isRunning = false;
-        this.step = 0;
-    }
+// ============================================================
+// TEST HELPER FUNCTIONS
+// ============================================================
 
-    async start() {
-        console.log('🧪 Starting Test Harness...\n');
+function log(message, data = null) {
+    const timestamp = new Date().toISOString();
+    console.log(`[${timestamp}] ${message}`);
+    if (data) {
+        console.log(JSON.stringify(data, null, 2));
+    }
+}
+
+function ensureOutputDir() {
+    if (!fs.existsSync(TEST_CONFIG.outputDir)) {
+        fs.mkdirSync(TEST_CONFIG.outputDir, { recursive: true });
+    }
+}
+
+function writeTestResult(result) {
+    ensureOutputDir();
+    const filename = `${TEST_CONFIG.testName}-${Date.now()}.json`;
+    const filepath = path.join(TEST_CONFIG.outputDir, filename);
+    fs.writeFileSync(filepath, JSON.stringify(result, null, 2));
+    log(`📊 Test result written to: ${filepath}`);
+}
+
+// ============================================================
+// MAIN TEST FUNCTION
+// ============================================================
+
+async function runPerformanceTest() {
+    log('🚀 Starting Performance Test');
+    log(`📊 Profile enabled: ${perf.enabled}`);
+    log(`📊 Test Name: ${TEST_CONFIG.testName}`);
+    log(`📊 Iterations: ${TEST_CONFIG.iterations}`);
+    log('');
+
+    const results = {
+        testName: TEST_CONFIG.testName,
+        timestamp: new Date().toISOString(),
+        nodeVersion: process.version,
+        platform: process.platform,
+        iterations: [],
+        summary: {
+            totalTime: 0,
+            avgTime: 0,
+            minTime: Infinity,
+            maxTime: 0,
+            functionsTracked: 0,
+            totalCalls: 0
+        }
+    };
+
+    for (let i = 0; i < TEST_CONFIG.iterations; i++) {
+        log(`\n📊 Iteration ${i + 1}/${TEST_CONFIG.iterations}`);
         
-        // Step 1: Create Orchestrator
-        this.orchestrator = new Orchestrator({
-            heartbeatTimeout: config.heartbeatTimeout,
-            restartDelay: config.restartDelay
+        const iterationResult = await runSingleIteration(i);
+        results.iterations.push(iterationResult);
+        
+        // Update summary
+        results.summary.totalTime += iterationResult.totalTime;
+        results.summary.minTime = Math.min(results.summary.minTime, iterationResult.totalTime);
+        results.summary.maxTime = Math.max(results.summary.maxTime, iterationResult.totalTime);
+    }
+
+    // Calculate averages
+    results.summary.avgTime = results.summary.totalTime / results.iterations.length;
+    
+    // Get final performance summary
+    const perfSummary = perf.getSummary();
+    results.summary.functionsTracked = perfSummary.totalFunctions;
+    results.summary.totalCalls = perfSummary.totalCalls;
+
+    log('\n📊 ===== TEST COMPLETE =====');
+    log(`📊 Total Iterations: ${results.iterations.length}`);
+    log(`📊 Total Time: ${(results.summary.totalTime / 1000).toFixed(2)}s`);
+    log(`📊 Avg Time: ${(results.summary.avgTime / 1000).toFixed(2)}s`);
+    log(`📊 Min Time: ${(results.summary.minTime / 1000).toFixed(2)}s`);
+    log(`📊 Max Time: ${(results.summary.maxTime / 1000).toFixed(2)}s`);
+    log(`📊 Functions Tracked: ${results.summary.functionsTracked}`);
+    log(`📊 Total Calls: ${results.summary.totalCalls}`);
+    
+    // Write results
+    writeTestResult(results);
+    
+    // Stop performance monitor
+    perf.stop();
+    
+    log('\n✅ Test completed successfully!');
+}
+
+// ============================================================
+// SINGLE ITERATION
+// ============================================================
+
+async function runSingleIteration(iteration) {
+    const startTime = performance.now();
+    const iterationId = perf.start(`Test.iteration.${iteration}`);
+
+    try {
+        // ✅ Create application instance
+        const app = new Application({
+            heartbeatTimeout: 15000,
+            restartDelay: 2000,
+            analyzerWorkers: 2,
+            browserWorkers: 2,
+            exporterWorkers: 1,
+            submitterWorkers: 5,
+            submitInterval: 3000,
+            dbPath: './data/queue.db',
+            readWorkers: 3,
+            writeWorkers: 1,
+            sqliteTimeout: 10000,
+            queueNames: ['analyzer', 'browser', 'exporter', 'job-submitter']
         });
 
-        // Step 3: Start ONLY Job Submitter
-        console.log('📦 Step 2: Starting Job Submitter...');
-        await this.orchestrator.createProcess({
-            type: 'job-submitter',
-            processingWorkers: 5,
-            queueName: 'job_submitter_queue'
-        });
-        console.log('✅ Job Submitter started\n');
+        // ✅ Track application start
+        const appStartId = perf.start('Application.start');
 
-        console.log('📊 Waiting 5 seconds for job-submitter to stabilize...');
-        await this._sleep(5000);
-
-        // Step 4: Display menu
-        await this._showMenu();
-    }
-
-    async _showMenu() {
-        console.log('\n' + '='.repeat(50));
-        console.log('📋 TEST MENU');
-        console.log('='.repeat(50));
-        console.log('  1️⃣  Start Analyzer');
-        console.log('  2️⃣  Start Browser');
-        console.log('  3️⃣  Start Exporter');
-        console.log('  4️⃣  Start ALL remaining processes');
-        console.log('  5️⃣  Submit jobs (requires Analyzer running)');
-        console.log('  6️⃣  Show process status');
-        console.log('  7️⃣  Shutdown all');
-        console.log('  8️⃣  Exit');
-        console.log('='.repeat(50));
-
-        // Read user input
-        const readline = require('readline').createInterface({
-            input: process.stdin,
-            output: process.stdout
+        // ✅ Start application
+        await perf.time('Application.start.full', async () => {
+            await app.start(eventConfig);
         });
 
-        const ask = (question) => new Promise((resolve) => {
-            readline.question(question, (answer) => {
-                resolve(answer.trim());
-                readline.close();
-            });
+        // ✅ Wait for ready
+        log(`⏳ Waiting for allProcessesReady...`);
+        await new Promise((resolve) => {
+            if (app.isReady) {
+                resolve();
+            } else {
+                app.once('allProcessesReady', resolve);
+            }
         });
 
-        const answer = await ask('\n👉 Enter your choice: ');
-
-        switch (answer) {
-            case '1':
-                await this._startAnalyzer();
-                break;
-            case '2':
-                await this._startBrowser();
-                break;
-            case '3':
-                await this._startExporter();
-                break;
-            case '4':
-                await this._startAllRemaining();
-                break;
-            case '5':
-                await this._submitJobs();
-                break;
-            case '6':
-                await this._showStatus();
-                break;
-            case '7':
-                await this._shutdown();
-                return;
-            case '8':
-                console.log('👋 Exiting...');
-                process.exit(0);
-                return;
-            default:
-                console.log('❌ Invalid choice. Try again.');
-        }
-
-        // Show menu again
-        await this._showMenu();
-    }
-
-    async _startAnalyzer() {
-        if (this.processes.analyzer) {
-            console.log('⚠️ Analyzer already running');
-            return;
-        }
-        console.log('📦 Starting Analyzer...');
-        await this.orchestrator.createProcess({
-            type: 'analyzer',
-            processingWorkers: config.analyzerWorkers,
-            queueName: 'analyzer_queue'
-        });
-        this.processes.analyzer = true;
-        console.log('✅ Analyzer started\n');
-    }
-
-    async _startBrowser() {
-        if (this.processes.browser) {
-            console.log('⚠️ Browser already running');
-            return;
-        }
-        console.log('📦 Starting Browser...');
-        await this.orchestrator.createProcess({
-            type: 'browser',
-            processingWorkers: config.browserWorkers,
-            queueName: 'browser_queue'
-        });
-        this.processes.browser = true;
-        console.log('✅ Browser started\n');
-    }
-
-    async _startExporter() {
-        if (this.processes.exporter) {
-            console.log('⚠️ Exporter already running');
-            return;
-        }
-        console.log('📦 Starting Exporter...');
-        await this.orchestrator.createProcess({
-            type: 'exporter',
-            processingWorkers: config.exporterWorkers,
-            queueName: 'export_queue'
-        });
-        this.processes.exporter = true;
-        console.log('✅ Exporter started\n');
-    }
-
-    async _startAllRemaining() {
-        console.log('📦 Starting ALL remaining processes...');
-        await this._startAnalyzer();
-        await this._startBrowser();
-        await this._startExporter();
-        console.log('✅ All processes started!\n');
-    }
-
-    async _submitJobs() {
-        // Check if analyzer is running
-        if (!this.processes.analyzer) {
-            console.log('❌ Analyzer is not running. Please start it first.');
-            return;
-        }
-
-        console.log('📤 Submitting jobs...');
-        console.log(`📋 Events: ${eventConfig.length}\n`);
-
-        // ✅ Start job submitter via orchestrator
-        await this.orchestrator.startJobSubmitter({
-            events: eventConfig,
-            maxJobs: eventConfig.length,
-            submitInterval: config.submitInterval
+        // ✅ Start job submitter
+        await perf.time('JobSubmitter.start', async () => {
+            await app.startJobSubmitter();
         });
 
-        console.log('\n✅ Jobs submitted! Check the logs for processing.\n');
+        // ✅ Wait a bit for processing
+        await new Promise(resolve => setTimeout(resolve, 2000));
+
+        // ✅ Shutdown
+        await app.stop();
+
+        perf.end(appStartId);
+
+    } catch (error) {
+        log(`❌ Iteration ${iteration} failed:`, error.message);
+        perf.end(iterationId, { error: error.message });
+        throw error;
     }
 
-    async _showStatus() {
-        console.log('\n📊 Process Status:');
-        console.log('='.repeat(40));
-        console.log(`  SQLite Server:  ${this.orchestrator.sqliteServer ? '✅ Running' : '❌ Stopped'}`);
-        console.log(`  Job Submitter:  ${this.processes['job-submitter'] !== null ? '✅ Running' : '❌ Stopped'}`);
-        console.log(`  Analyzer:       ${this.processes.analyzer ? '✅ Running' : '⏳ Not started'}`);
-        console.log(`  Browser:        ${this.processes.browser ? '✅ Running' : '⏳ Not started'}`);
-        console.log(`  Exporter:       ${this.processes.exporter ? '✅ Running' : '⏳ Not started'}`);
-        console.log('='.repeat(40) + '\n');
-    }
+    const totalTime = performance.now() - startTime;
+    perf.end(iterationId);
 
-    async _shutdown() {
-        console.log('🛑 Shutting down all processes...');
-        await this.orchestrator.shutdown();
-        console.log('✅ Shutdown complete');
-        process.exit(0);
-    }
+    return {
+        iteration,
+        totalTime,
+        success: true,
+        timestamp: new Date().toISOString()
+    };
+}
 
-    async _sleep(ms) {
-        return new Promise(resolve => setTimeout(resolve, ms));
+// ============================================================
+// QUICK TEST (Minimal)
+// ============================================================
+
+async function runQuickTest() {
+    log('🚀 Running Quick Performance Test');
+    log(`📊 Profile enabled: ${perf.enabled}`);
+    log('');
+
+    const startTime = performance.now();
+
+    try {
+        const app = new Application({
+            heartbeatTimeout: 15000,
+            restartDelay: 2000,
+            analyzerWorkers: 2,
+            browserWorkers: 2,
+            exporterWorkers: 1,
+            submitterWorkers: 5,
+            submitInterval: 3000,
+            dbPath: './data/queue.db',
+            readWorkers: 3,
+            writeWorkers: 1,
+            sqliteTimeout: 10000,
+            queueNames: ['analyzer', 'browser', 'exporter', 'job-submitter']
+        });
+
+        const appStartId = perf.start('Application.start.quick');
+
+        await app.start(eventConfig);
+
+        await new Promise((resolve) => {
+            if (app.isReady) {
+                resolve();
+            } else {
+                app.once('allProcessesReady', resolve);
+            }
+        });
+
+        await app.startJobSubmitter();
+
+        await new Promise(resolve => setTimeout(resolve, 1000));
+
+        await app.stop();
+
+        perf.end(appStartId);
+
+        const totalTime = performance.now() - startTime;
+        log(`\n✅ Quick test completed in ${(totalTime / 1000).toFixed(2)}s`);
+
+        perf.stop();
+
+    } catch (error) {
+        log(`❌ Quick test failed:`, error.message);
+        perf.stop();
+        process.exit(1);
     }
 }
 
 // ============================================================
-// Run the test harness
+// RUN TESTS
 // ============================================================
 
-const test = new TestHarness();
+if (require.main === module) {
+    const args = process.argv.slice(2);
+    const isQuick = args.includes('--quick') || args.includes('-q');
 
-// Handle graceful shutdown
-process.on('SIGINT', async () => {
-    console.log('\n\n🛑 Received SIGINT');
-    await test._shutdown();
-});
+    if (isQuick) {
+        runQuickTest();
+    } else {
+        runPerformanceTest();
+    }
+}
 
-process.on('SIGTERM', async () => {
-    console.log('\n\n🛑 Received SIGTERM');
-    await test._shutdown();
-});
+// ============================================================
+// EXPORTS
+// ============================================================
 
-// Start test
-test.start().catch((error) => {
-    console.error('❌ Test failed:', error);
-    process.exit(1);
-});
+module.exports = {
+    runPerformanceTest,
+    runQuickTest,
+    perf
+};

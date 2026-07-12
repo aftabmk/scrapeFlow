@@ -1,3 +1,4 @@
+// queue/Node.js
 class Node {
     constructor(job) {
         this.job = job;
