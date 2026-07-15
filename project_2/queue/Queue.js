@@ -1,4 +1,4 @@
-// queue/normal-queue.js
+// queue/Queue.js
 
 /**
  * Node class for linked list
@@ -11,7 +11,7 @@ class QueueNode {
 }
 
 /**
- * Normal Queue implementation using Linked List
+ * Queue implementation using Linked List
  * O(1) enqueue and dequeue operations
  */
 class Queue {
@@ -40,11 +40,9 @@ class Queue {
     const node = new QueueNode(item);
 
     if (this.tail === null) {
-      // Queue is empty
       this.head = node;
       this.tail = node;
     } else {
-      // Add to the end
       this.tail.next = node;
       this.tail = node;
     }
@@ -65,7 +63,6 @@ class Queue {
     const node = this.head;
     this.head = node.next;
 
-    // If queue becomes empty, update tail
     if (this.head === null) {
       this.tail = null;
     }
@@ -122,19 +119,6 @@ class Queue {
     this.head = null;
     this.tail = null;
     this.length = 0;
-  }
-
-  /**
-   * Get all items as array (for debugging) - O(n)
-   */
-  toArray() {
-    const result = [];
-    let current = this.head;
-    while (current !== null) {
-      result.push(current.value);
-      current = current.next;
-    }
-    return result;
   }
 
   /**

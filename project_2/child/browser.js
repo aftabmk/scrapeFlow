@@ -12,14 +12,13 @@ class BrowserChildProcess extends BaseChildProcess {
 
     async _processJob(job) {
         const data = job.data || {};
-        
+
         console.log(`[Browser] 🌐 Scraping: ${data.exchange || 'N/A'} - ${data.contract || 'N/A'}`);
         console.log(`[Browser] 📋 Job ID: ${job.id}`);
         console.log(`[Browser] 📋 URL: ${data.pageUrl || 'N/A'}`);
-        
-        // Simulate browser scraping
+
         await this._sleep(1000 + Math.random() * 1500);
-        
+
         return {
             jobId: job.id,
             event: data.event || {},

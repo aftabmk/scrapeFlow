@@ -14,7 +14,7 @@ class Logger {
     _log(level, message, data = null) {
         const timestamp = new Date().toISOString();
         const prefix = `[${timestamp}] [${this.prefix}] [${level.toUpperCase()}]`;
-        
+
         if (data) {
             console.log(`${prefix} ${message}`, data);
         } else {

@@ -8,11 +8,10 @@ class DurableQueue {
         this.visibilityTimeout = options.visibilityTimeout || 30000;
         this.maxRetries = options.maxRetries || 5;
         this.sweepInterval = options.sweepInterval || 1000;
-        
-        // ✅ serverReady flag - controls whether to recover
+
         this.serverReady = options.serverReady || false;
         this.recovered = false;
-        
+
         this.queue = new LinkedQueue(name);
         this.inFlight = new Map();
         this.deadLetter = [];
@@ -31,7 +30,6 @@ class DurableQueue {
         this.sweeperTimer = null;
         this._recoverPromise = null;
 
-        // ✅ Only recover if serverReady is true (crash restart)
         if (this.serverReady) {
             console.log(`[DurableQueue:${this.name}] 🔄 Server ready - recovering...`);
             this._recoverPromise = this.recover().catch(err => {
@@ -44,8 +42,6 @@ class DurableQueue {
 
         this._startSweeper();
     }
-
-    // === Sweeper for timed-out jobs ===
 
     _startSweeper() {
         this.sweeperTimer = setInterval(() => {
@@ -95,8 +91,6 @@ class DurableQueue {
 
         }, this.sweepInterval);
     }
-
-    // === Public API ===
 
     async enqueue(job) {
         if (this._recoverPromise) {
@@ -200,13 +194,11 @@ class DurableQueue {
         return true;
     }
 
-    // === Recovery ===
-
     async recover() {
         try {
             if (this.commWorker && typeof this.commWorker.sendRequest === 'function') {
                 const result = await this.commWorker.sendRequest('recover');
-                
+
                 if (result && result.rows) {
                     this.queue.clear();
                     this.inFlight.clear();
@@ -237,8 +229,6 @@ class DurableQueue {
             return 0;
         }
     }
-
-    // === Stats ===
 
     getStats() {
         return {

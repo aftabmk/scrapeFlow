@@ -4,11 +4,14 @@ class SQLQueries {
         this.db = db;
     }
 
-    // === WRITE OPERATIONS ===
+    _getTableName(queue) {
+        const sanitized = queue.replace(/[^a-zA-Z0-9_]/g, '_');
+        return `${sanitized}_queue`;
+    }
 
     append(queue, jobId, payload) {
-        const table = `queue_${queue}_queue`;
-        
+        const table = this._getTableName(queue);
+
         const stmt = this.db.prepare(`
             INSERT OR REPLACE INTO ${table} (job_id, payload, status)
             VALUES (?, ?, 'PENDING')
@@ -25,13 +28,13 @@ class SQLQueries {
     }
 
     deliver(queue, jobId) {
-        const table = `queue_${queue}_queue`;
+        const table = this._getTableName(queue);
 
         const stmt = this.db.prepare(`
             UPDATE ${table} 
             SET status = 'IN_FLIGHT',
-                visible_at = DATETIME(CURRENT_TIMESTAMP, '+30 seconds'),
-                updated_at = CURRENT_TIMESTAMP
+                visible_at = datetime('now', '+30 seconds'),
+                updated_at = datetime('now')
             WHERE job_id = ? AND status = 'PENDING'
         `);
         const result = stmt.run(jobId);
@@ -50,7 +53,7 @@ class SQLQueries {
     }
 
     ack(queue, jobId) {
-        const table = `queue_${queue}_queue`;
+        const table = this._getTableName(queue);
 
         const stmt = this.db.prepare(`
             DELETE FROM ${table} WHERE job_id = ?
@@ -71,13 +74,13 @@ class SQLQueries {
     }
 
     requeue(queue, jobId) {
-        const table = `queue_${queue}_queue`;
+        const table = this._getTableName(queue);
 
         const stmt = this.db.prepare(`
             UPDATE ${table} 
             SET status = 'PENDING', 
                 retries = retries + 1,
-                updated_at = CURRENT_TIMESTAMP
+                updated_at = datetime('now')
             WHERE job_id = ?
         `);
         const result = stmt.run(jobId);
@@ -102,7 +105,7 @@ class SQLQueries {
         `);
         stmt.run(queue, jobId, JSON.stringify(payload), payload?.retries || 0);
 
-        const table = `queue_${queue}_queue`;
+        const table = this._getTableName(queue);
         const deleteStmt = this.db.prepare(`
             DELETE FROM ${table} WHERE job_id = ?
         `);
@@ -117,10 +120,8 @@ class SQLQueries {
         return { success: true, jobId };
     }
 
-    // === READ OPERATIONS ===
-
     dequeue(queue, workerId) {
-        const table = `queue_${queue}_queue`;
+        const table = this._getTableName(queue);
 
         const stmt = this.db.prepare(`
             SELECT job_id, payload FROM ${table}
@@ -138,9 +139,9 @@ class SQLQueries {
         const updateStmt = this.db.prepare(`
             UPDATE ${table} 
             SET status = 'IN_FLIGHT',
-                visible_at = DATETIME(CURRENT_TIMESTAMP, '+30 seconds'),
+                visible_at = datetime('now', '+30 seconds'),
                 worker_id = ?,
-                started_at = CURRENT_TIMESTAMP
+                started_at = datetime('now')
             WHERE job_id = ?
         `);
         updateStmt.run(workerId, row.job_id);
@@ -151,7 +152,7 @@ class SQLQueries {
         `);
 
         this._updateQueueState(queue);
-        return { 
+        return {
             job: {
                 job_id: row.job_id,
                 payload: JSON.parse(row.payload)
@@ -176,7 +177,7 @@ class SQLQueries {
     }
 
     recover(queue) {
-        const table = `queue_${queue}_queue`;
+        const table = this._getTableName(queue);
 
         const stmt = this.db.prepare(`
             SELECT job_id, payload FROM ${table} 
@@ -197,7 +198,7 @@ class SQLQueries {
     }
 
     stats(queue) {
-        const table = `queue_${queue}_queue`;
+        const table = this._getTableName(queue);
 
         const stmt = this.db.prepare(`
             SELECT 
@@ -226,15 +227,13 @@ class SQLQueries {
         };
     }
 
-    // === HELPER ===
-
     _updateQueueState(queue) {
         try {
             const stats = this.stats(queue);
             const updateStmt = this.db.prepare(`
                 INSERT OR REPLACE INTO queue_state 
                 (queue_name, pending_count, in_flight_count, dead_letter_count, last_updated)
-                VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                VALUES (?, ?, ?, ?, datetime('now'))
             `);
             updateStmt.run(queue, stats.pending || 0, stats.in_flight || 0, stats.dead_letter || 0);
         } catch (err) {

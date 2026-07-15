@@ -1,6 +1,5 @@
 // sqlite-server/index.js
 const SQLiteServer = require('./server');
-const { parseArgs } = require('util');
 
 // Parse command line arguments
 const args = process.argv.slice(2);
@@ -32,18 +31,32 @@ if (require.main === module) {
     console.log(`[SQLiteServer] WRITE_WORKERS: ${options.writeWorkers}`);
     console.log(`[SQLiteServer] QUEUES: ${options.queueNames.join(', ')}`);
 
+    // ✅ Handle uncaught exceptions
+    process.on('uncaughtException', (err) => {
+        console.error('[SQLiteServer] Uncaught exception:', err.message);
+        console.error('[SQLiteServer] Stack:', err.stack);
+        process.exit(1);
+    });
+
+    process.on('unhandledRejection', (reason, promise) => {
+        console.error('[SQLiteServer] Unhandled rejection:', reason);
+        process.exit(1);
+    });
+
     try {
         const server = new SQLiteServer(options);
 
         server.on('ready', (info) => {
-            console.log('[SQLiteServer] ✅ Ready signal sent to parent');
-            if (process.send) {
-                process.send({ type: 'SQLITE_READY', ...info });
-            }
+            console.log('[SQLiteServer] ✅ Ready');
         });
 
-        server.start().catch((err) => {
-            console.error('[SQLiteServer] Failed to start:', err);
+        // At the top after server.start()
+        server.start().then(() => {
+            console.log('[SQLiteServer] ✅ Server running');
+            console.log('[SQLiteServer] 📨 Sending signals to parent...');
+        }).catch((err) => {
+            console.error('[SQLiteServer] Failed to start:', err.message);
+            console.error('[SQLiteServer] Stack:', err.stack);
             process.exit(1);
         });
 
@@ -64,13 +77,9 @@ if (require.main === module) {
             await server.shutdown();
         });
 
-        process.on('uncaughtException', (err) => {
-            console.error('[SQLiteServer] Uncaught exception:', err);
-            process.exit(1);
-        });
-
     } catch (error) {
-        console.error('[SQLiteServer] Fatal error:', error);
+        console.error('[SQLiteServer] Fatal error:', error.message);
+        console.error('[SQLiteServer] Stack:', error.stack);
         process.exit(1);
     }
 }

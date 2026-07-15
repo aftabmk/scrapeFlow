@@ -2,7 +2,6 @@
 const Application = require('./main');
 const eventConfig = require('./event.json');
 
-// Create application instance
 const app = new Application({
     heartbeatTimeout: 15000,
     restartDelay: 2000,
@@ -15,17 +14,18 @@ const app = new Application({
     readWorkers: 3,
     writeWorkers: 1,
     sqliteTimeout: 10000,
-    queueNames: ['analyzer', 'browser', 'exporter', 'job-submitter']
+    queueNames: ['analyzer', 'browser', 'exporter', 'job-submitter'],
+    pipeline: ['job-submitter', 'analyzer', 'browser', 'exporter']
 });
 
-// Lambda handler
 module.exports.handler = async (event, context) => {
     console.log('📋 Lambda invoked');
-    
+
     try {
         const events = event.events || eventConfig;
         await app.start(events);
-        
+
+        // ✅ Wait for actual allProcessesReady event
         await new Promise((resolve) => {
             if (app.isReady) {
                 resolve();
@@ -33,9 +33,9 @@ module.exports.handler = async (event, context) => {
                 app.once('allProcessesReady', resolve);
             }
         });
-        
-        await app.startJobSubmitter();
-        
+
+        await app.startPipeline();
+
         return {
             statusCode: 200,
             body: JSON.stringify({
@@ -58,7 +58,7 @@ module.exports.handler = async (event, context) => {
 
 module.exports.app = app;
 
-// Local run
+// ✅ Local run
 if (require.main === module) {
     (async () => {
         console.log('🏠 Running in local mode...');
@@ -69,9 +69,10 @@ if (require.main === module) {
             await app.start(eventConfig);
             console.log('[index] App started, checking if ready...');
 
+            // ✅ Wait for actual allProcessesReady event
             if (app.isReady) {
-                console.log('[index] App is already ready, starting job submitter...');
-                await app.startJobSubmitter();
+                console.log('[index] App is already ready, starting pipeline...');
+                await app.startPipeline();
                 return;
             }
 
@@ -82,17 +83,10 @@ if (require.main === module) {
                     console.log('[index] allProcessesReady received!');
                     resolve();
                 });
-
-                setTimeout(() => {
-                    if (!app.jobSubmitterStarted) {
-                        console.log('[index] ⚠️ allProcessesReady timeout, forcing start...');
-                        resolve();
-                    }
-                }, 15000);
             });
 
-            await app.startJobSubmitter();
-            console.log('[index] ✅ Job submitter started successfully');
+            await app.startPipeline();
+            console.log('[index] ✅ Pipeline started successfully');
 
         } catch (error) {
             console.error('❌ Application failed:', error);

@@ -12,14 +12,13 @@ class ExporterChildProcess extends BaseChildProcess {
 
     async _processJob(job) {
         const data = job.data || {};
-        
+
         console.log(`[Exporter] 📤 Exporting: ${data.exchange || 'N/A'} - ${data.contract || 'N/A'}`);
         console.log(`[Exporter] 📋 Job ID: ${job.id}`);
         console.log(`[Exporter] 📋 URL: ${data.pageUrl || 'N/A'}`);
-        
-        // Simulate export work
+
         await this._sleep(500 + Math.random() * 1000);
-        
+
         return {
             jobId: job.id,
             event: data.event || {},

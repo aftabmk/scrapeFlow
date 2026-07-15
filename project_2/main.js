@@ -6,7 +6,7 @@ class Application extends EventEmitter {
     constructor(options = {}) {
         super();
         this.orchestrator = null;
-        this.jobSubmitterStarted = false;
+        this.pipelineStarted = false;
         this.options = options;
         this.eventConfig = options.events || [];
         this.isReady = false;
@@ -21,12 +21,11 @@ class Application extends EventEmitter {
     async start(eventConfig = []) {
         const events = eventConfig.length > 0 ? eventConfig : this.eventConfig;
         this.eventConfig = events;
-        
+
         console.log('🚀 Starting Application...');
         console.log(`📋 Loaded ${events.length} events from config`);
 
         try {
-            // 1. Create Orchestrator
             this.orchestrator = new Orchestrator({
                 heartbeatTimeout: this.options.heartbeatTimeout || 15000,
                 restartDelay: this.options.restartDelay || 2000,
@@ -34,16 +33,15 @@ class Application extends EventEmitter {
                 readWorkers: this.options.readWorkers || 3,
                 writeWorkers: this.options.writeWorkers || 1,
                 sqliteTimeout: this.options.sqliteTimeout || 10000,
-                queueNames: this.options.queueNames || ['analyzer', 'browser', 'exporter', 'job-submitter']
+                queueNames: this.options.queueNames || ['analyzer', 'browser', 'exporter', 'job-submitter'],
+                pipeline: this.options.pipeline || ['job-submitter', 'analyzer', 'browser', 'exporter']
             });
 
             this._setupEventListeners();
 
-            // 2. Start SQLite Server (async)
             console.log('📦 Starting SQLite Server...');
             await this.orchestrator.startSQLiteServer();
 
-            // 3. Define process configurations
             const processConfigs = [
                 {
                     type: 'analyzer',
@@ -75,37 +73,37 @@ class Application extends EventEmitter {
                 }
             ];
 
-            // 4. Spawn ALL children in parallel
             console.log('📦 Creating child processes (parallel)...');
             await this.orchestrator.createAllProcesses(processConfigs);
 
             console.log('✅ All processes created!');
 
-            // 5. Wait for all processes to be ready
+            // ✅ ONLY emit when actual event fires
             this.orchestrator.once('allProcessesReady', () => {
-                console.log('\n🎯 All processes ready! Forwarding to app...');
+                console.log('\n🎯 All processes ready! Starting pipeline...\n');
                 this.isReady = true;
                 this.emit('allProcessesReady');
             });
 
+            // ✅ Check if already ready (edge case)
             if (this.orchestrator.allProcessesReady) {
-                console.log('\n🎯 All processes already ready! Forwarding to app...');
+                console.log('\n🎯 All processes already ready! Starting pipeline...\n');
                 this.isReady = true;
                 this.emit('allProcessesReady');
             }
 
-            // 6. Fallback timeout
-            setTimeout(() => {
-                if (!this.isReady) {
-                    console.log('\n⚠️ allProcessesReady timeout, forcing ready state...');
-                    this.isReady = true;
-                    this.emit('allProcessesReady');
-                }
-            }, 15000);
+            // ❌ REMOVE the timeout fallback - it's causing false positives
+            // setTimeout(() => {
+            //     if (!this.isReady) {
+            //         console.log('\n⚠️ allProcessesReady timeout, forcing ready state...');
+            //         this.isReady = true;
+            //         this.emit('allProcessesReady');
+            //     }
+            // }, 15000);
 
             console.log('🎯 System ready!');
             console.log('📊 Press Ctrl+C to stop');
-            
+
             return this;
 
         } catch (error) {
@@ -116,11 +114,7 @@ class Application extends EventEmitter {
 
     _setupEventListeners() {
         this.orchestrator.on('processReady', ({ pid, type, processingWorkers }) => {
-            console.log(`✅ Process ${pid} (${type}) alive with ${processingWorkers} workers`);
-        });
-
-        this.orchestrator.on('processReadyAfterRecover', ({ pid, type }) => {
-            console.log(`✅ Process ${pid} (${type}) ready after recover`);
+            console.log(`✅ Process ${pid} (${type}) ready with ${processingWorkers} workers`);
         });
 
         this.orchestrator.on('processExit', ({ pid, type, code }) => {
@@ -134,11 +128,11 @@ class Application extends EventEmitter {
         });
 
         this.orchestrator.on('submitterStarted', ({ maxJobs, submitInterval }) => {
-            console.log(`📤 Job submitter started: ${maxJobs} jobs, interval: ${submitInterval}ms`);
+            console.log(`📤 Submitter started: ${maxJobs} jobs, interval: ${submitInterval}ms`);
         });
 
         this.orchestrator.on('submitterComplete', ({ totalJobs }) => {
-            console.log(`✅ All ${totalJobs} events processed by job-submitter!`);
+            console.log(`✅ All ${totalJobs} events processed by submitter!`);
         });
 
         this.orchestrator.on('jobSubmitted', ({ jobNumber, totalJobs, jobId, eventData }) => {
@@ -156,28 +150,44 @@ class Application extends EventEmitter {
         this.orchestrator.on('heartbeatTimeout', ({ pid }) => {
             console.log(`⏰ Heartbeat timeout for process ${pid}`);
         });
+
+        this.orchestrator.on('pipelineError', ({ jobId, from, to, error }) => {
+            console.error(`❌ Pipeline error for ${jobId}:`, error.message);
+        });
+
+        this.orchestrator.on('pipelineStarted', ({ events }) => {
+            console.log(`🚀 Pipeline started with ${events.length} events`);
+        });
+
+        this.orchestrator.on('routed', ({ jobId, from, to }) => {
+            console.log(`🔄 Routed ${jobId}: ${from} → ${to}`);
+        });
     }
 
-    async startJobSubmitter() {
-        if (this.jobSubmitterStarted) {
-            console.log('[Application] Job submitter already started');
+    // ✅ Start Pipeline (Replaces startJobSubmitter)
+    async startPipeline() {
+        if (this.pipelineStarted) {
+            console.log('[Application] Pipeline already started');
             return;
         }
-        this.jobSubmitterStarted = true;
-        
+        this.pipelineStarted = true;
+
         if (this.orchestrator) {
             const events = this.eventConfig || [];
-            console.log(`[Application] 🚀 Starting job submitter with ${events.length} events`);
-            
+            console.log(`[Application] 🚀 Starting pipeline with ${events.length} events`);
+            console.log(`[Application] 📋 Pipeline: submitter → analyzer → browser → exporter`);
+
             if (events.length > 0) {
                 console.log(`[Application] 📋 Events:`, events.map(e => `${e.EXCHANGE}-${e.CONTRACT}`).join(', '));
             }
-            
-            await this.orchestrator.startJobSubmitter({
+
+            await this.orchestrator.startPipeline({
                 events: events,
                 maxJobs: events.length,
                 submitInterval: this.options.submitInterval || 3000
             });
+
+            console.log('[Application] ✅ Pipeline started successfully');
         } else {
             console.error('[Application] Orchestrator not available');
         }
@@ -196,9 +206,16 @@ class Application extends EventEmitter {
         return this.orchestrator;
     }
 
-    getProcessStats() {
+    async getProcessStats() {
         if (this.orchestrator) {
             return this.orchestrator.getProcessStats();
+        }
+        return null;
+    }
+
+    async getPipelineStatus() {
+        if (this.orchestrator) {
+            return this.orchestrator.getPipelineStatus();
         }
         return null;
     }

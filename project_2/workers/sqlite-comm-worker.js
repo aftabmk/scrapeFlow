@@ -4,14 +4,14 @@ const { EventEmitter } = require('events');
 class SQLiteCommWorker extends EventEmitter {
     constructor(options = {}) {
         super();
-        
+
         this.workerId = options.workerId || `sqlite_comm_${process.pid}`;
         this.writeQueue = options.writeQueue;
         this.queueName = options.queueName || 'default_queue';
         this.pollInterval = options.pollInterval || 100;
         this.batchSize = options.batchSize || 50;
         this.isRunning = true;
-        
+
         this.pendingRequests = new Map();
         this.stats = {
             batchesProcessed: 0,
@@ -22,8 +22,6 @@ class SQLiteCommWorker extends EventEmitter {
         this._setupIPCListener();
         this._startProcessing();
     }
-
-    // === IPC Setup ===
 
     _setupIPCListener() {
         process.on('message', (message) => {
@@ -49,13 +47,9 @@ class SQLiteCommWorker extends EventEmitter {
         }
     }
 
-    // === Public API ===
-
     async sendRequest(op, data = {}) {
         return this._sendRequest(op, data);
     }
-
-    // === Private Request ===
 
     _sendRequest(op, data = {}) {
         return new Promise((resolve, reject) => {
@@ -107,8 +101,6 @@ class SQLiteCommWorker extends EventEmitter {
         });
     }
 
-    // === Processing Loop ===
-
     async _startProcessing() {
         while (this.isRunning) {
             try {
@@ -127,7 +119,7 @@ class SQLiteCommWorker extends EventEmitter {
         }
 
         const batch = this.writeQueue.dequeueBatch(this.batchSize);
-        
+
         if (batch.length === 0) {
             await this._sleep(this.pollInterval);
             return;
@@ -140,7 +132,7 @@ class SQLiteCommWorker extends EventEmitter {
         } catch (error) {
             console.error(`[SQLiteCommWorker] Batch failed:`, error.message);
             this.stats.failedOperations += batch.length;
-            
+
             for (const op of batch) {
                 this.writeQueue.enqueue(op);
             }
@@ -187,8 +179,6 @@ class SQLiteCommWorker extends EventEmitter {
         }
     }
 
-    // === Operation Processors ===
-
     async _processAppends(ops) {
         for (const op of ops) {
             await this._sendRequest('append', {
@@ -232,13 +222,9 @@ class SQLiteCommWorker extends EventEmitter {
         }
     }
 
-    // === Utility ===
-
     _sleep(ms) {
         return new Promise(resolve => setTimeout(resolve, ms));
     }
-
-    // === Shutdown ===
 
     shutdown() {
         this.isRunning = false;
