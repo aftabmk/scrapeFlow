@@ -18,20 +18,17 @@ class WorkerPool extends EventEmitter {
     this.workers = new Map();
     
     this.workerTypes = {
-      submitter: { script: path.join(__dirname, 'submitter-worker.js'), count: 1, description: 'Submits jobs' },
-      analyzer: { script: path.join(__dirname, 'analyzer-worker.js'), count: 2, description: 'Analyzes data' },
-      browser: { script: path.join(__dirname, 'browser-worker.js'), count: 2, description: 'Scrapes data' },
-      exporter: { script: path.join(__dirname, 'exporter-worker.js'), count: 1, description: 'Exports data' },
+      submitter: { script: path.join(__dirname, 'submitter-worker.js'), count: 1 },
+      analyzer: { script: path.join(__dirname, 'analyzer-worker.js'), count: 2 },
+      browser: { script: path.join(__dirname, 'browser-worker.js'), count: 2 },
+      exporter: { script: path.join(__dirname, 'exporter-worker.js'), count: 1 },
     };
     
     this.stats = { created: 0, destroyed: 0, restarted: 0, errors: 0 };
     this._shuttingDown = false;
     this._shutdownComplete = false;
     
-    console.log('[WorkerPool] Initialized (Health checks disabled)');
-    for (const [type, config] of Object.entries(this.workerTypes)) {
-      console.log(`  - ${type}: ${config.count} workers (${config.description})`);
-    }
+    console.log('[WorkerPool] Initialized');
   }
 
   async start() {
@@ -107,7 +104,6 @@ class WorkerPool extends EventEmitter {
         info.processed++;
         info.status = 'idle';
         info.currentTask = null;
-        
         if (this.options.loadBalancer) {
           this.options.loadBalancer.handleWorkerResponse(workerId, { ...message, workerId, type: 'task.complete' });
         }
@@ -117,7 +113,6 @@ class WorkerPool extends EventEmitter {
         info.errors++;
         info.status = 'idle';
         info.currentTask = null;
-        
         if (this.options.loadBalancer) {
           this.options.loadBalancer.handleWorkerResponse(workerId, { ...message, workerId, type: 'task.failed' });
         }
@@ -137,12 +132,12 @@ class WorkerPool extends EventEmitter {
         break;
         
       case 'job.complete':
-        console.log(`[WorkerPool] Job complete: ${message.payload.jobId}`);
+        console.log(`[WorkerPool] ✅ Job complete: ${message.payload.jobId}`);
         this.emit('job.complete', message.payload);
         break;
         
       case 'job.failed':
-        console.error(`[WorkerPool] Job failed: ${message.payload.jobId} (${message.payload.stage})`);
+        console.error(`[WorkerPool] ❌ Job failed: ${message.payload.jobId}`);
         this.emit('job.failed', message.payload);
         break;
         
@@ -166,7 +161,6 @@ class WorkerPool extends EventEmitter {
     console.error(`[WorkerPool] Worker ${workerId} (${info.type}) error:`, error.message);
     this.emit('worker.error', { workerId, error: error.message });
     
-    // ✅ Simple restart - no health tracking
     if (!this._shuttingDown) {
       this.restartWorker(workerId);
     }
@@ -184,7 +178,6 @@ class WorkerPool extends EventEmitter {
       this.options.loadBalancer.unregisterWorker(workerId);
     }
     
-    // ✅ Always restart if not shutting down
     if (!this._shuttingDown) {
       console.log(`[WorkerPool] Restarting worker ${workerId} (${info.type})`);
       this.restartWorker(workerId);
@@ -255,7 +248,7 @@ class WorkerPool extends EventEmitter {
         busy: list.filter(w => w.status === 'busy').length,
       };
     }
-    return { total: workers.length, byType, stats: this.stats, shuttingDown: this._shuttingDown };
+    return { total: workers.length, byType, stats: this.stats };
   }
 
   sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }

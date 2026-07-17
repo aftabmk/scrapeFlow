@@ -1,74 +1,29 @@
 // workers/submitter-worker.js
-const { parentPort, workerData } = require('worker_threads');
+const BaseWorker = require('./base-worker');
 
-class SubmitterWorker {
+class SubmitterWorker extends BaseWorker {
   constructor() {
-    this.id = workerData.id || `submitter_${Date.now()}`;
-    this.type = 'submitter';
-    this.isRunning = true;
-    this.currentTask = null;
-    this.processed = 0;
-    this.errors = 0;
-    this.startTime = Date.now();
+    super({
+      type: 'submitter'
+    });
     
     this.submittedJobs = new Set();
-    this.completedJobs = new Set();
-    this.failedJobs = new Set();
     this.jobStatus = new Map();
-    
     this.submitInterval = parseInt(process.env.SUBMIT_INTERVAL) || 1000;
     this.maxJobs = parseInt(process.env.MAX_JOBS) || 50;
     this.parallelJobs = parseInt(process.env.PARALLEL_JOBS) || 10;
     this.events = [];
     this.currentIndex = 0;
     this.isSubmitting = false;
-    
-    this.sendReady();
-    this.start();
-  }
-
-  sendReady() {
-    if (parentPort) {
-      parentPort.postMessage({ 
-        type: 'worker.ready', 
-        workerId: this.id, 
-        workerType: this.type, 
-        timestamp: Date.now() 
-      });
-    }
-  }
-
-  start() {
-    if (parentPort) {
-      parentPort.on('message', async (message) => { 
-        await this.handleMessage(message); 
-      });
-    }
-    // ✅ No heartbeat interval
-  }
-
-  async handleMessage(message) {
-    if (!message || !message.type) return;
-    
-    switch (message.type) {
-      case 'execute':
-        await this.executeTask(message);
-        break;
-      case 'shutdown':
-        this.shutdown();
-        break;
-      default:
-        console.log(`[Submitter ${this.id}] Unknown message type: ${message.type}`);
-    }
   }
 
   async executeTask(message) {
     const { taskId, payload } = message;
     this.currentTask = taskId;
-    
+
     try {
       let result;
-      
+
       switch (payload?.type) {
         case 'start_submitting':
           result = await this.startSubmitting(payload);
@@ -79,32 +34,14 @@ class SubmitterWorker {
         default:
           result = { status: 'ignored', message: `Unknown payload type: ${payload?.type}` };
       }
-      
+
       this.processed++;
-      
-      if (parentPort) {
-        parentPort.postMessage({ 
-          type: 'task.complete', 
-          taskId, 
-          result, 
-          workerId: this.id, 
-          timestamp: Date.now() 
-        });
-      }
-      
+      this.sendTaskComplete(taskId, result);
+
     } catch (error) {
       this.errors++;
-      console.error(`[Submitter ${this.id}] Task ${taskId} failed:`, error.message);
-      
-      if (parentPort) {
-        parentPort.postMessage({ 
-          type: 'task.failed', 
-          taskId, 
-          error: error.message, 
-          workerId: this.id, 
-          timestamp: Date.now() 
-        });
-      }
+      console.error(`[${this.getDisplayName()}] ❌ Error:`, error.message);
+      this.sendTaskFailed(taskId, error);
     } finally {
       this.currentTask = null;
     }
@@ -112,139 +49,139 @@ class SubmitterWorker {
 
   async startSubmitting(payload) {
     const { events, maxJobs, interval } = payload || {};
-    
+
     if (this.isSubmitting) {
       return { status: 'already_submitting' };
     }
-    
+
     this.events = events || [];
     this.maxJobs = maxJobs || this.events.length || this.maxJobs;
     this.submitInterval = interval || this.submitInterval;
     this.currentIndex = 0;
     this.isSubmitting = true;
-    
-    console.log(`[Submitter ${this.id}] 🚀 Starting submission of ${this.maxJobs} jobs`);
-    
-    if (parentPort) {
-      parentPort.postMessage({ 
-        type: 'submitter.started', 
-        workerId: this.id, 
-        payload: { totalJobs: this.maxJobs, timestamp: Date.now() } 
-      });
+
+    console.log(`[${this.getDisplayName()}] 🚀 Starting submission of ${this.maxJobs} jobs`);
+
+    const allResults = await this.submitAllJobs();
+
+    console.log(`[${this.getDisplayName()}] ✅ Submission complete: ${allResults.length} jobs`);
+
+    // Send all jobs in one batch to analyzer
+    if (allResults.length > 0) {
+      console.log(`[${this.getDisplayName()}] 📤 Sending ${allResults.length} jobs to Analyzer`);
+      this.routeBatch(this.currentTask, allResults, 'submitter', 'analyzer');
     }
-    
-    await this.submitAllJobs();
-    
-    console.log(`[Submitter ${this.id}] ✅ Submission complete: ${this.submittedJobs.size} jobs`);
-    
-    if (parentPort) {
-      parentPort.postMessage({ 
-        type: 'submitter.complete', 
-        workerId: this.id, 
-        payload: { totalJobs: this.submittedJobs.size, failedJobs: this.failedJobs.size, timestamp: Date.now() } 
-      });
-    }
-    
-    return { status: 'complete', totalJobs: this.submittedJobs.size, failedJobs: this.failedJobs.size };
+
+    return {
+      status: 'complete',
+      totalJobs: allResults.length,
+      failedJobs: 0
+    };
   }
 
   async submitAllJobs() {
-    if (this.events.length === 0) return;
-    
+    if (this.events.length === 0) return [];
+
     const totalToSubmit = Math.min(this.maxJobs, this.events.length);
+    const allResults = [];
     let submitted = 0;
-    
+
     while (submitted < totalToSubmit && this.isSubmitting) {
       const batchSize = Math.min(this.parallelJobs, totalToSubmit - submitted);
       const batch = [];
-      
+
       for (let i = 0; i < batchSize; i++) {
         if (this.currentIndex >= this.events.length) break;
         const event = this.events[this.currentIndex];
         if (event && event.EXCHANGE && event.CONTRACT) {
-          batch.push({ event, index: this.currentIndex + 1, total: totalToSubmit });
+          batch.push({
+            event,
+            index: this.currentIndex + 1,
+            total: totalToSubmit
+          });
         }
         this.currentIndex++;
       }
-      
+
       if (batch.length === 0) break;
-      
+
       for (const item of batch) {
-        try {
-          const result = await this.submitSingleJob({
-            job: { 
-              id: `${item.event.EXCHANGE}-${item.event.CONTRACT}`, 
-              data: item.event, 
-              metadata: { exchange: item.event.EXCHANGE, contract: item.event.CONTRACT, index: item.index, total: item.total } 
-            },
-            event: item.event,
+        const jobId = `${item.event.EXCHANGE}-${item.event.CONTRACT}`;
+        const jobData = {
+          id: jobId,
+          data: item.event,
+          metadata: {
+            exchange: item.event.EXCHANGE,
+            contract: item.event.CONTRACT,
             index: item.index,
-            total: item.total,
-          });
-          if (result.status === 'submitted') submitted++;
-        } catch (error) {
-          this.errors++;
-          console.error(`[Submitter ${this.id}] Failed to submit:`, error);
-        }
+            total: item.total
+          }
+        };
+
+        this.submittedJobs.add(jobId);
+        this.jobStatus.set(jobId, {
+          status: 'submitted',
+          submittedAt: Date.now(),
+          event: item.event
+        });
+
+        console.log(`[${this.getDisplayName()}] 📤 Submitting: ${jobId} (${item.index}/${item.total})`);
+
+        allResults.push({
+          jobId,
+          job: jobData,
+          event: item.event,
+          index: item.index,
+          total: item.total
+        });
+
+        submitted++;
       }
-      
+
       if (submitted < totalToSubmit && this.isSubmitting) {
         await this.sleep(this.submitInterval);
       }
     }
+
+    return allResults;
   }
 
   async submitSingleJob(payload) {
     const { job, event, index, total } = payload;
     const jobId = job.id || `${event.EXCHANGE}-${event.CONTRACT}`;
-    
+
     if (this.submittedJobs.has(jobId)) {
       return { jobId, status: 'duplicate' };
     }
-    
-    const jobData = { 
-      id: jobId, 
-      data: job.data || job, 
-      metadata: { ...job.metadata, submittedAt: Date.now(), index: index || 1, total: total || 1 } 
+
+    const jobData = {
+      id: jobId,
+      data: job.data || job,
+      metadata: {
+        ...job.metadata,
+        submittedAt: Date.now(),
+        index: index || 1,
+        total: total || 1
+      }
     };
-    
+
     this.submittedJobs.add(jobId);
-    this.jobStatus.set(jobId, { status: 'submitted', submittedAt: Date.now(), event });
-    
-    console.log(`[Submitter ${this.id}] 📤 Submitting: ${jobId} (${index}/${total})`);
-    
-    if (parentPort) {
-      parentPort.postMessage({
-        type: 'task.complete',
-        taskId: this.currentTask,
-        result: {
-          jobId,
-          job: jobData,
-          event,
-          from: 'submitter',
-          to: 'analyzer',
-          requiresRouting: true,
-          nextStage: 'analyzer',
-          currentStage: 'submitter',
-          timestamp: Date.now(),
-        },
-        workerId: this.id,
-        timestamp: Date.now(),
-      });
-    }
-    
+    this.jobStatus.set(jobId, {
+      status: 'submitted',
+      submittedAt: Date.now(),
+      event
+    });
+
+    console.log(`[${this.getDisplayName()}] 📤 Submitting: ${jobId} (${index}/${total})`);
+
+    // Single job routing
+    this.routeJob(this.currentTask, jobData, 'submitter', 'analyzer', {
+      event,
+      index,
+      total
+    });
+
     return { jobId, status: 'submitted' };
-  }
-
-  sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
-
-  shutdown() {
-    console.log(`[Submitter ${this.id}] Shutting down...`);
-    this.isRunning = false;
-    this.isSubmitting = false;
-    if (parentPort) {
-      parentPort.postMessage({ type: 'worker.shutdown', workerId: this.id, timestamp: Date.now() });
-    }
   }
 }
 

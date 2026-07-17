@@ -1,220 +1,133 @@
 // workers/analyzer-worker.js
-const { parentPort, workerData } = require('worker_threads');
+const BaseWorker = require('./base-worker');
 
-class AnalyzerWorker {
+class AnalyzerWorker extends BaseWorker {
   constructor() {
-    this.id = workerData.id || `analyzer_${Date.now()}`;
-    this.type = 'analyzer';
-    this.isRunning = true;
-    this.currentTask = null;
-    this.processed = 0;
-    this.errors = 0;
-    this.startTime = Date.now();
-    this.processedJobs = new Map();
-    this.analysisCache = new Map();
-    this.stats = { totalAnalyzed: 0, cacheHits: 0, cacheMisses: 0, avgAnalysisTime: 0, totalAnalysisTime: 0 };
-    
-    this.sendReady();
-    this.start();
-  }
-
-  sendReady() {
-    if (parentPort) {
-      parentPort.postMessage({ type: 'worker.ready', workerId: this.id, workerType: this.type, timestamp: Date.now() });
-    }
-  }
-
-  start() {
-    if (parentPort) {
-      parentPort.on('message', async (message) => { await this.handleMessage(message); });
-    }
-  }
-
-  async handleMessage(message) {
-    if (!message || !message.type) return;
-    switch (message.type) {
-      case 'execute': await this.executeTask(message); break;
-      case 'shutdown': this.shutdown(); break;
-      default: console.log(`[Analyzer ${this.id}] Unknown message type: ${message.type}`);
-    }
+    super({
+      type: 'analyzer'
+    });
   }
 
   async executeTask(message) {
     const { taskId, payload } = message;
     this.currentTask = taskId;
-    
+
     try {
-      const { job } = payload;
-      console.log(`[Analyzer ${this.id}] 🔍 Analyzing: ${job.id}`);
+      // ✅ Get jobs from payload - handle both structures
+      let jobs = null;
       
-      const analyzed = await this.analyze(job);
-      this.processed++;
-      this.stats.totalAnalyzed++;
-      
-      if (parentPort) {
-        parentPort.postMessage({
-          type: 'task.complete',
-          taskId,
-          result: {
-            jobId: job.id,
-            job: { ...job, data: { ...job.data, analyzed } },
-            from: 'analyzer',
-            to: 'browser',
-            requiresRouting: true,
-            nextStage: 'browser',
-            currentStage: 'analyzer',
-            timestamp: Date.now(),
-          },
-          workerId: this.id,
-          timestamp: Date.now(),
-        });
+      // Case 1: payload.jobs exists (direct array)
+      if (payload.jobs && Array.isArray(payload.jobs)) {
+        jobs = payload.jobs;
       }
+      // Case 2: payload.job.jobs exists (nested)
+      else if (payload.job && payload.job.jobs && Array.isArray(payload.job.jobs)) {
+        jobs = payload.job.jobs;
+      }
+      // Case 3: payload.job is a single job
+      else if (payload.job && !Array.isArray(payload.job)) {
+        // Single job - wrap in array
+        jobs = [payload.job];
+      }
+
+      if (!jobs || jobs.length === 0) {
+        console.log(`[${this.getDisplayName()}] ⚠️ No jobs found in payload`);
+        this.sendTaskComplete(taskId, { status: 'no_jobs', message: 'No jobs to process' });
+        return;
+      }
+
+      // Check if this is a batch
+      if (jobs.length > 1) {
+        console.log(`[${this.getDisplayName()}] 📦 Received BATCH of ${jobs.length} jobs`);
+        await this.processBatch(taskId, jobs);
+      } else {
+        console.log(`[${this.getDisplayName()}] 📥 Received single job: ${jobs[0].jobId || jobs[0].id}`);
+        await this.processSingle(taskId, jobs[0]);
+      }
+
     } catch (error) {
       this.errors++;
-      console.error(`[Analyzer ${this.id}] ❌ Analysis failed:`, error);
-      if (parentPort) {
-        parentPort.postMessage({ type: 'task.failed', taskId, error: error.message, workerId: this.id, timestamp: Date.now() });
-      }
+      console.error(`[${this.getDisplayName()}] ❌ Error:`, error.message);
+      this.sendTaskFailed(taskId, error);
     } finally {
       this.currentTask = null;
     }
   }
 
-  async analyze(job) {
-    const startTime = Date.now();
-    const { event, exchange, contract, pageUrl, apiUrl, apiUrlBuilder, referer } = job.data || {};
-    const cacheKey = `${exchange}-${contract}-${pageUrl}`;
-    
-    if (this.analysisCache.has(cacheKey)) {
-      this.stats.cacheHits++;
-      return this.analysisCache.get(cacheKey);
+  async processBatch(taskId, jobs) {
+    const results = [];
+
+    for (const jobData of jobs) {
+      // Handle both formats: jobData.job or jobData itself
+      const job = jobData.job || jobData;
+      const jobId = jobData.jobId || job.id;
+      const event = jobData.event || job.data;
+      const index = jobData.index || job.metadata?.index || 1;
+      const total = jobData.total || job.metadata?.total || jobs.length;
+
+      console.log(`[${this.getDisplayName()}] 🔍 Analyzing: ${jobId} (${index}/${total})`);
+
+      // Simulate analysis work
+      await this.sleep(100 + Math.random() * 200);
+
+      const analyzed = {
+        jobId: jobId,
+        exchange: event?.EXCHANGE || job.data?.EXCHANGE || 'UNKNOWN',
+        contract: event?.CONTRACT || job.data?.CONTRACT || 'UNKNOWN',
+        analyzed: true,
+        analyzedAt: new Date().toISOString()
+      };
+
+      results.push({
+        jobId,
+        job: {
+          ...job,
+          data: {
+            ...job.data,
+            analyzed
+          }
+        },
+        event: event || job.data,
+        index,
+        total
+      });
+
+      console.log(`[${this.getDisplayName()}] ✅ Analyzed: ${jobId}`);
     }
-    this.stats.cacheMisses++;
+
+    this.processed += results.length;
+    console.log(`[${this.getDisplayName()}] 📤 Sending ${results.length} jobs to Browser`);
+    this.routeBatch(taskId, results, 'analyzer', 'browser');
+  }
+
+  async processSingle(taskId, jobData) {
+    // Handle both formats
+    const job = jobData.job || jobData;
+    const jobId = jobData.jobId || job.id;
+    const event = jobData.event || job.data;
+
     await this.sleep(100 + Math.random() * 200);
-    
-    const analysis = {
-      jobId: job.id,
-      exchange: exchange || 'UNKNOWN',
-      contract: contract || 'UNKNOWN',
-      pageUrl: pageUrl || null,
-      apiUrl: apiUrl || null,
-      apiUrlBuilder: apiUrlBuilder || null,
-      referer: referer || null,
-      metadata: {
-        type: this.determineType(event),
-        priority: this.determinePriority(event),
-        complexity: this.determineComplexity(event),
-        estimatedTime: this.estimateTime(event),
-        dependencies: this.identifyDependencies(event),
-      },
-      analysis: {
-        valid: true,
-        timestamp: new Date().toISOString(),
-        checksum: this.generateChecksum(event),
-        version: '1.0',
-        structure: this.analyzeStructure(event),
-        patterns: this.identifyPatterns(event),
-        risks: this.identifyRisks(event),
-      },
-      metrics: { analysisTime: Date.now() - startTime, memoryUsed: process.memoryUsage().heapUsed },
-      originalEvent: event,
+
+    const analyzed = {
+      jobId: jobId,
+      exchange: event?.EXCHANGE || job.data?.EXCHANGE || 'UNKNOWN',
+      contract: event?.CONTRACT || job.data?.CONTRACT || 'UNKNOWN',
+      analyzed: true,
+      analyzedAt: new Date().toISOString()
     };
-    
-    this.analysisCache.set(cacheKey, analysis);
-    this.processedJobs.set(job.id, analysis);
-    this.stats.totalAnalysisTime += Date.now() - startTime;
-    this.stats.avgAnalysisTime = this.stats.totalAnalysisTime / this.stats.totalAnalyzed;
-    return analysis;
-  }
 
-  determineType(event) {
-    if (event.CONTRACT) {
-      switch (event.CONTRACT.toUpperCase()) {
-        case 'OPTION': return 'options';
-        case 'FUTURE': return 'futures';
-        case 'EQUITY': return 'equity';
-        default: return 'unknown';
+    this.processed++;
+
+    const jobWithAnalysis = {
+      ...job,
+      data: {
+        ...job.data,
+        analyzed
       }
-    }
-    return 'unknown';
-  }
+    };
 
-  determinePriority(event) {
-    const exchange = event.EXCHANGE?.toUpperCase() || '';
-    const contract = event.CONTRACT?.toUpperCase() || '';
-    if (exchange === 'NSE' && (contract === 'OPTION' || contract === 'FUTURE')) return 'high';
-    if (exchange === 'BSE' && contract === 'OPTION') return 'medium';
-    return 'low';
-  }
-
-  determineComplexity(event) {
-    let score = 0;
-    if (event.API_URL_BUILDER) score += 2;
-    if (event.API_URL && event.API_URL.includes('v3')) score += 1;
-    if (event.CONTRACT === 'OPTION') score += 2;
-    if (event.CONTRACT === 'FUTURE') score += 1;
-    if (event.EXCHANGE === 'BSE') score += 1;
-    if (score >= 4) return 'high';
-    if (score >= 2) return 'medium';
-    return 'low';
-  }
-
-  estimateTime(event) {
-    const complexity = this.determineComplexity(event);
-    switch (complexity) {
-      case 'high': return 2000 + Math.random() * 1000;
-      case 'medium': return 1000 + Math.random() * 1000;
-      default: return 500 + Math.random() * 500;
-    }
-  }
-
-  identifyDependencies(event) {
-    const deps = [];
-    if (event.API_URL_BUILDER) deps.push('api_builder');
-    if (event.API_URL) deps.push('api_direct');
-    if (event.PAGE_URL) deps.push('page_scrape');
-    if (event.CONTRACT === 'OPTION') deps.push('option_chain');
-    return deps;
-  }
-
-  analyzeStructure(event) {
-    return { hasApiUrl: !!event.API_URL, hasApiBuilder: !!event.API_URL_BUILDER, hasPageUrl: !!event.PAGE_URL, hasReferer: !!event.REFERER, exchange: event.EXCHANGE, contract: event.CONTRACT };
-  }
-
-  identifyPatterns(event) {
-    const patterns = [];
-    if (event.API_URL && event.API_URL.includes('nseindia')) patterns.push('nse_api');
-    if (event.API_URL && event.API_URL.includes('bseindia')) patterns.push('bse_api');
-    if (event.CONTRACT === 'OPTION' && event.API_URL_BUILDER) patterns.push('option_chain_v3');
-    return patterns;
-  }
-
-  identifyRisks(event) {
-    const risks = [];
-    if (!event.API_URL && !event.API_URL_BUILDER) risks.push({ type: 'no_api_endpoint', severity: 'high' });
-    if (!event.PAGE_URL) risks.push({ type: 'no_page_url', severity: 'medium' });
-    if (event.CONTRACT === 'OPTION' && !event.API_URL_BUILDER) risks.push({ type: 'option_missing_builder', severity: 'high' });
-    if (event.EXCHANGE === 'BSE' && event.CONTRACT === 'FUTURE') risks.push({ type: 'bse_future_complex', severity: 'medium' });
-    return risks;
-  }
-
-  generateChecksum(event) {
-    const str = JSON.stringify({ exchange: event.EXCHANGE, contract: event.CONTRACT, apiUrl: event.API_URL, pageUrl: event.PAGE_URL });
-    let hash = 0;
-    for (let i = 0; i < str.length; i++) {
-      const char = str.charCodeAt(i);
-      hash = ((hash << 5) - hash) + char;
-      hash = hash & hash;
-    }
-    return Math.abs(hash).toString(16);
-  }
-
-  sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
-
-  shutdown() {
-    console.log(`[Analyzer ${this.id}] Shutting down...`);
-    this.isRunning = false;
-    if (parentPort) parentPort.postMessage({ type: 'worker.shutdown', workerId: this.id, timestamp: Date.now() });
+    console.log(`[${this.getDisplayName()}] 📤 Sending to Browser: ${jobId}`);
+    this.routeJob(taskId, jobWithAnalysis, 'analyzer', 'browser');
   }
 }
 
