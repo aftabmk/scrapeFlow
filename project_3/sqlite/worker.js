@@ -9,6 +9,7 @@ class SQLiteWorker {
         this.id = workerData.id || `sqlite_${Date.now()}`;
         this.type = 'sqlite';
         this.isRunning = true;
+        
         this.dbPath = workerData.dbPath || './data/queue.db';
         this.readWorkers = workerData.readWorkers || 2;
         this.writeWorkers = workerData.writeWorkers || 2;
@@ -78,6 +79,7 @@ class SQLiteWorker {
 
     createTables() {
         try {
+            // Main jobs table
             this.db.exec(`
                 CREATE TABLE IF NOT EXISTS jobs (
                     id TEXT PRIMARY KEY,
@@ -93,6 +95,7 @@ class SQLiteWorker {
                 )
             `);
             
+            // Queue log - tracks all operations
             this.db.exec(`
                 CREATE TABLE IF NOT EXISTS queue_log (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -104,6 +107,18 @@ class SQLiteWorker {
                 )
             `);
             
+            // In-flight jobs tracking
+            this.db.exec(`
+                CREATE TABLE IF NOT EXISTS in_flight (
+                    job_id TEXT PRIMARY KEY,
+                    queue TEXT NOT NULL,
+                    worker_id TEXT,
+                    started_at INTEGER NOT NULL,
+                    expires_at INTEGER NOT NULL
+                )
+            `);
+            
+            // Checkpoints for full state recovery
             this.db.exec(`
                 CREATE TABLE IF NOT EXISTS checkpoints (
                     id TEXT PRIMARY KEY,
@@ -112,6 +127,7 @@ class SQLiteWorker {
                 )
             `);
             
+            // Dead letter queue
             this.db.exec(`
                 CREATE TABLE IF NOT EXISTS dead_letter (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -124,10 +140,24 @@ class SQLiteWorker {
                 )
             `);
             
+            // Completed jobs archive (for history)
+            this.db.exec(`
+                CREATE TABLE IF NOT EXISTS completed_jobs (
+                    id TEXT PRIMARY KEY,
+                    queue TEXT NOT NULL,
+                    data TEXT NOT NULL,
+                    metadata TEXT,
+                    completed_at INTEGER NOT NULL
+                )
+            `);
+            
+            // Indexes for performance
             this.db.exec(`CREATE INDEX IF NOT EXISTS idx_jobs_queue ON jobs(queue, status)`);
             this.db.exec(`CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status, created_at)`);
             this.db.exec(`CREATE INDEX IF NOT EXISTS idx_queue_log_queue ON queue_log(queue, timestamp)`);
             this.db.exec(`CREATE INDEX IF NOT EXISTS idx_queue_log_job ON queue_log(job_id)`);
+            this.db.exec(`CREATE INDEX IF NOT EXISTS idx_in_flight_queue ON in_flight(queue)`);
+            this.db.exec(`CREATE INDEX IF NOT EXISTS idx_in_flight_expires ON in_flight(expires_at)`);
             
             console.log(`[SQLiteWorker ${this.id}] ✅ Tables created`);
             
@@ -169,6 +199,7 @@ class SQLiteWorker {
             let result;
             
             switch (operation) {
+                // Write operations
                 case 'append':
                     result = this.append(queue, jobId, data);
                     break;
@@ -189,6 +220,11 @@ class SQLiteWorker {
                     result = this.deadletter(queue, jobId, data);
                     break;
                     
+                case 'complete':
+                    result = this.complete(queue, jobId, data);
+                    break;
+                    
+                // Read operations
                 case 'dequeue':
                     result = this.dequeue(queue, jobId);
                     break;
@@ -201,12 +237,32 @@ class SQLiteWorker {
                     result = this.recover(queue);
                     break;
                     
+                case 'recover_all':
+                    result = this.recoverAll();
+                    break;
+                    
                 case 'stats':
                     result = this.stats(queue);
                     break;
                     
+                case 'get_in_flight':
+                    result = this.getInFlight(queue);
+                    break;
+                    
+                case 'get_pending':
+                    result = this.getPending(queue);
+                    break;
+                    
                 case 'batch_write':
                     result = this.batchWrite(data);
+                    break;
+                    
+                case 'save_checkpoint':
+                    result = this.saveCheckpoint(data);
+                    break;
+                    
+                case 'load_checkpoint':
+                    result = this.loadCheckpoint(data?.id);
                     break;
                     
                 default:
@@ -236,7 +292,8 @@ class SQLiteWorker {
         }
     }
 
-    // Database operations
+    // === Write Operations ===
+
     append(queue, jobId, payload) {
         const stmt = this.db.prepare(`
             INSERT OR REPLACE INTO jobs (id, queue, status, data, metadata, attempts, created_at, updated_at)
@@ -249,7 +306,7 @@ class SQLiteWorker {
             VALUES ('${queue}', '${jobId}', 'append', '${JSON.stringify(payload)}', ${Date.now()})
         `);
         
-        return { success: true, jobId };
+        return { success: true, jobId, status: 'pending' };
     }
 
     deliver(queue, jobId) {
@@ -260,15 +317,28 @@ class SQLiteWorker {
         const result = stmt.run(Date.now(), jobId);
         
         if (result.changes === 0) {
-            throw new Error(`Job ${jobId} not found or already delivered`);
+            // Check if job exists in different state
+            const checkStmt = this.db.prepare(`SELECT status FROM jobs WHERE job_id = ?`);
+            const row = checkStmt.get(jobId);
+            if (row) {
+                throw new Error(`Job ${jobId} already in status: ${row.status}`);
+            }
+            throw new Error(`Job ${jobId} not found`);
         }
+        
+        // Add to in-flight tracking
+        const inFlightStmt = this.db.prepare(`
+            INSERT OR REPLACE INTO in_flight (job_id, queue, started_at, expires_at)
+            VALUES (?, ?, ?, ?)
+        `);
+        inFlightStmt.run(jobId, queue, Date.now(), Date.now() + 30000);
         
         this.db.exec(`
             INSERT INTO queue_log (queue, job_id, operation, timestamp)
             VALUES ('${queue}', '${jobId}', 'deliver', ${Date.now()})
         `);
         
-        return { success: true, jobId };
+        return { success: true, jobId, status: 'in_flight' };
     }
 
     ack(queue, jobId) {
@@ -279,12 +349,40 @@ class SQLiteWorker {
             throw new Error(`Job ${jobId} not found for ACK`);
         }
         
+        // Remove from in-flight
+        const inFlightStmt = this.db.prepare(`DELETE FROM in_flight WHERE job_id = ?`);
+        inFlightStmt.run(jobId);
+        
         this.db.exec(`
             INSERT INTO queue_log (queue, job_id, operation, timestamp)
             VALUES ('${queue}', '${jobId}', 'ack', ${Date.now()})
         `);
         
-        return { success: true, jobId };
+        return { success: true, jobId, status: 'completed' };
+    }
+
+    complete(queue, jobId, data) {
+        // Move to completed jobs archive
+        const stmt = this.db.prepare(`
+            INSERT OR REPLACE INTO completed_jobs (id, queue, data, metadata, completed_at)
+            VALUES (?, ?, ?, ?, ?)
+        `);
+        stmt.run(jobId, queue, JSON.stringify(data), JSON.stringify({}), Date.now());
+        
+        // Remove from main jobs
+        const deleteStmt = this.db.prepare(`DELETE FROM jobs WHERE job_id = ?`);
+        deleteStmt.run(jobId);
+        
+        // Remove from in-flight
+        const inFlightStmt = this.db.prepare(`DELETE FROM in_flight WHERE job_id = ?`);
+        inFlightStmt.run(jobId);
+        
+        this.db.exec(`
+            INSERT INTO queue_log (queue, job_id, operation, timestamp)
+            VALUES ('${queue}', '${jobId}', 'complete', ${Date.now()})
+        `);
+        
+        return { success: true, jobId, status: 'completed' };
     }
 
     requeue(queue, jobId) {
@@ -298,12 +396,16 @@ class SQLiteWorker {
             throw new Error(`Job ${jobId} not found for requeue`);
         }
         
+        // Remove from in-flight
+        const inFlightStmt = this.db.prepare(`DELETE FROM in_flight WHERE job_id = ?`);
+        inFlightStmt.run(jobId);
+        
         this.db.exec(`
             INSERT INTO queue_log (queue, job_id, operation, timestamp)
             VALUES ('${queue}', '${jobId}', 'requeue', ${Date.now()})
         `);
         
-        return { success: true, jobId };
+        return { success: true, jobId, status: 'pending' };
     }
 
     deadletter(queue, jobId, payload) {
@@ -316,18 +418,23 @@ class SQLiteWorker {
         const deleteStmt = this.db.prepare(`DELETE FROM jobs WHERE job_id = ?`);
         deleteStmt.run(jobId);
         
+        const inFlightStmt = this.db.prepare(`DELETE FROM in_flight WHERE job_id = ?`);
+        inFlightStmt.run(jobId);
+        
         this.db.exec(`
             INSERT INTO queue_log (queue, job_id, operation, timestamp)
             VALUES ('${queue}', '${jobId}', 'deadletter', ${Date.now()})
         `);
         
-        return { success: true, jobId };
+        return { success: true, jobId, status: 'deadletter' };
     }
+
+    // === Read Operations ===
 
     dequeue(queue, workerId) {
         const stmt = this.db.prepare(`
-            SELECT job_id, payload FROM jobs
-            WHERE status = 'PENDING' AND queue = ?
+            SELECT id, data FROM jobs
+            WHERE queue = ? AND status = 'PENDING'
             ORDER BY created_at ASC
             LIMIT 1
         `);
@@ -337,21 +444,29 @@ class SQLiteWorker {
             return { job: null };
         }
         
+        // Update to in-flight
         const updateStmt = this.db.prepare(`
             UPDATE jobs SET status = 'IN_FLIGHT', updated_at = ?
-            WHERE job_id = ?
+            WHERE id = ?
         `);
-        updateStmt.run(Date.now(), row.job_id);
+        updateStmt.run(Date.now(), row.id);
+        
+        // Add to in-flight tracking
+        const inFlightStmt = this.db.prepare(`
+            INSERT OR REPLACE INTO in_flight (job_id, queue, worker_id, started_at, expires_at)
+            VALUES (?, ?, ?, ?, ?)
+        `);
+        inFlightStmt.run(row.id, queue, workerId, Date.now(), Date.now() + 30000);
         
         this.db.exec(`
             INSERT INTO queue_log (queue, job_id, operation, timestamp)
-            VALUES ('${queue}', '${row.job_id}', 'deliver', ${Date.now()})
+            VALUES ('${queue}', '${row.id}', 'dequeue', ${Date.now()})
         `);
         
         return {
             job: {
-                job_id: row.job_id,
-                payload: JSON.parse(row.payload)
+                job_id: row.id,
+                payload: JSON.parse(row.data)
             }
         };
     }
@@ -373,20 +488,82 @@ class SQLiteWorker {
     }
 
     recover(queue) {
+        // Recover pending jobs
+        const pendingStmt = this.db.prepare(`
+            SELECT id, data FROM jobs
+            WHERE queue = ? AND status = 'PENDING'
+            ORDER BY created_at ASC
+        `);
+        const pendingRows = pendingStmt.all(queue);
+        
+        // Recover in-flight jobs (worker crashed)
+        const inFlightStmt = this.db.prepare(`
+            SELECT job_id, data FROM jobs j
+            JOIN in_flight i ON j.id = i.job_id
+            WHERE j.queue = ? AND j.status = 'IN_FLIGHT'
+        `);
+        const inFlightRows = inFlightStmt.all(queue);
+        
+        return {
+            rows: [
+                ...pendingRows.map(row => ({
+                    id: row.id,
+                    payload: JSON.parse(row.data),
+                    op: 'append'
+                })),
+                ...inFlightRows.map(row => ({
+                    id: row.job_id,
+                    payload: JSON.parse(row.data),
+                    op: 'requeue'  // Requeue in-flight jobs
+                }))
+            ]
+        };
+    }
+
+    recoverAll() {
+        const result = {};
+        
+        // Get all queues
+        const queueStmt = this.db.prepare(`SELECT DISTINCT queue FROM jobs`);
+        const queues = queueStmt.all();
+        
+        for (const { queue } of queues) {
+            result[queue] = this.recover(queue);
+        }
+        
+        return result;
+    }
+
+    getInFlight(queue) {
         const stmt = this.db.prepare(`
-            SELECT job_id, payload FROM jobs
-            WHERE queue = ? AND status IN ('PENDING', 'IN_FLIGHT')
+            SELECT j.id, j.data, i.started_at, i.expires_at, i.worker_id
+            FROM jobs j
+            JOIN in_flight i ON j.id = i.job_id
+            WHERE j.queue = ? AND j.status = 'IN_FLIGHT'
+        `);
+        const rows = stmt.all(queue);
+        
+        return rows.map(row => ({
+            job_id: row.id,
+            payload: JSON.parse(row.data),
+            started_at: row.started_at,
+            expires_at: row.expires_at,
+            worker_id: row.worker_id
+        }));
+    }
+
+    getPending(queue) {
+        const stmt = this.db.prepare(`
+            SELECT id, data FROM jobs
+            WHERE queue = ? AND status = 'PENDING'
             ORDER BY created_at ASC
         `);
         const rows = stmt.all(queue);
         
-        return {
-            rows: rows.map(row => ({
-                id: row.job_id,
-                payload: JSON.parse(row.payload),
-                op: 'append'
-            }))
-        };
+        return rows.map(row => ({
+            job_id: row.id,
+            payload: JSON.parse(row.data)
+        }));
     }
 
     stats(queue) {
@@ -401,12 +578,22 @@ class SQLiteWorker {
         `);
         const row = stmt.get(queue);
         
+        // Get dead letter count
+        const deadStmt = this.db.prepare(`SELECT COUNT(*) as count FROM dead_letter WHERE queue = ?`);
+        const deadRow = deadStmt.get(queue);
+        
+        // Get in-flight count
+        const inFlightCountStmt = this.db.prepare(`SELECT COUNT(*) as count FROM in_flight WHERE queue = ?`);
+        const inFlightCountRow = inFlightCountStmt.get(queue);
+        
         return {
             total: row.total || 0,
             pending: row.pending || 0,
             in_flight: row.in_flight || 0,
+            in_flight_tracked: inFlightCountRow?.count || 0,
             complete: row.complete || 0,
             failed: row.failed || 0,
+            dead_letter: deadRow?.count || 0,
             queue
         };
     }
@@ -419,29 +606,81 @@ class SQLiteWorker {
         
         this.db.exec('BEGIN TRANSACTION');
         
-        for (const entry of entries) {
-            stmt.run(
-                entry.id,
-                entry.queue,
-                entry.status,
-                JSON.stringify(entry.data),
-                JSON.stringify(entry.metadata || {}),
-                entry.attempts || 0,
-                entry.created_at || Date.now(),
-                Date.now(),
-                entry.completed_at || null,
-                entry.error || null
-            );
+        try {
+            for (const entry of entries) {
+                stmt.run(
+                    entry.id,
+                    entry.queue,
+                    entry.status,
+                    JSON.stringify(entry.data),
+                    JSON.stringify(entry.metadata || {}),
+                    entry.attempts || 0,
+                    entry.created_at || Date.now(),
+                    Date.now(),
+                    entry.completed_at || null,
+                    entry.error || null
+                );
+                
+                // Log operation
+                if (entry.operation) {
+                    const logStmt = this.db.prepare(`
+                        INSERT INTO queue_log (queue, job_id, operation, data, timestamp)
+                        VALUES (?, ?, ?, ?, ?)
+                    `);
+                    logStmt.run(entry.queue, entry.id, entry.operation, JSON.stringify(entry.data), Date.now());
+                }
+            }
+            
+            this.db.exec('COMMIT');
+            return { success: true, count: entries.length };
+        } catch (error) {
+            this.db.exec('ROLLBACK');
+            throw error;
+        }
+    }
+
+    saveCheckpoint(checkpoint) {
+        const stmt = this.db.prepare(`
+            INSERT OR REPLACE INTO checkpoints (id, state, timestamp)
+            VALUES (?, ?, ?)
+        `);
+        stmt.run(checkpoint.id, JSON.stringify(checkpoint.state), checkpoint.timestamp);
+        return { success: true, id: checkpoint.id };
+    }
+
+    loadCheckpoint(id = null) {
+        let stmt;
+        if (id) {
+            stmt = this.db.prepare(`SELECT * FROM checkpoints WHERE id = ?`);
+            const row = stmt.get(id);
+            if (row) {
+                return { id: row.id, state: JSON.parse(row.state), timestamp: row.timestamp };
+            }
+            return null;
         }
         
-        this.db.exec('COMMIT');
-        
-        return { success: true, count: entries.length };
+        stmt = this.db.prepare(`SELECT * FROM checkpoints ORDER BY timestamp DESC LIMIT 1`);
+        const row = stmt.get();
+        if (row) {
+            return { id: row.id, state: JSON.parse(row.state), timestamp: row.timestamp };
+        }
+        return null;
     }
 
     shutdown() {
         console.log(`[SQLiteWorker ${this.id}] Shutting down...`);
         this.isRunning = false;
+        
+        // Final checkpoint
+        const checkpoint = {
+            id: `ckpt_${Date.now()}`,
+            state: { 
+                status: 'shutdown',
+                timestamp: Date.now()
+            },
+            timestamp: Date.now()
+        };
+        this.saveCheckpoint(checkpoint);
         
         if (this.db) {
             try {

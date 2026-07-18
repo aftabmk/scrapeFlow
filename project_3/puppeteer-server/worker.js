@@ -1,6 +1,7 @@
 // puppeteer-server/worker.js
 const { parentPort, workerData } = require('worker_threads');
 const puppeteer = require('puppeteer');
+const { namedMutex } = require('../utils/mutex');
 
 class PuppeteerWorker {
     constructor() {
@@ -17,6 +18,11 @@ class PuppeteerWorker {
         this.tabs = [];
         this.tabPool = [];
         this.isReady = false;
+        
+        // ✅ Track which job has which tab
+        this.tabAssignments = new Map();
+        this.processingJobs = new Set();
+        this.pendingRequests = new Map();
         
         console.log(`[PuppeteerWorker ${this.id}] Config: ${this.tabCount} tabs`);
         
@@ -107,6 +113,7 @@ class PuppeteerWorker {
                     lastUsed: Date.now(),
                     created: Date.now(),
                     stats: { scraped: 0, errors: 0, totalTime: 0 },
+                    assignedJobId: null,
                 };
                 
                 page.on('error', (error) => {
@@ -137,7 +144,6 @@ class PuppeteerWorker {
         console.log(`[PuppeteerWorker ${this.id}] Received: ${message.type}`);
         
         switch (message.type) {
-            // ✅ Only handle SCRAPE_REQUEST from orchestrator
             case 'SCRAPE_REQUEST':
                 await this.handleScrapeRequest(message);
                 break;
@@ -151,90 +157,159 @@ class PuppeteerWorker {
         }
     }
 
+    /**
+     * ✅ Handle scrape request - ONLY lock tab assignment, NOT scraping
+     */
     async handleScrapeRequest(message) {
         const { messageId, payload, sourceWorkerId } = message;
-        const { jobId, url, exchange, contract, eventData, analysis } = payload || {};
+        const { jobId, url, exchange, contract } = payload || {};
         
-        console.log(`[PuppeteerWorker ${this.id}] 📥 Scraping: ${jobId} (${url})`);
-        
-        try {
-            // Get available tab
-            let tab = this.getAvailableTab();
-            if (!tab) {
-                tab = await this.waitForAvailableTab();
-                if (!tab) {
-                    throw new Error('No tabs available');
-                }
+        console.log(`[PuppeteerWorker ${this.id}] 📥 Scraping: ${jobId}`);
+
+        let tab = null;
+        let isDuplicate = false;
+
+        // ✅ STEP 1: Acquire mutex ONLY for tab assignment (FAST)
+        await namedMutex.execute(`tab_pool_${this.id}`, async () => {
+            // ✅ Check if job already being processed
+            if (this.processingJobs.has(jobId)) {
+                console.log(`[PuppeteerWorker ${this.id}] ⚠️ Job ${jobId} already processing`);
+                isDuplicate = true;
+                return;
             }
             
-            // Scrape with tab
+            // ✅ Get available tab (atomic operation)
+            const availableTab = this.getAvailableTab(jobId);
+            if (!availableTab) {
+                console.log(`[PuppeteerWorker ${this.id}] ⚠️ No tabs available for ${jobId}`);
+                return;
+            }
+            
+            // ✅ Mark job as processing atomically
+            this.processingJobs.add(jobId);
+            availableTab.assignedJobId = jobId;
+            this.tabAssignments.set(jobId, availableTab.id);
+            tab = availableTab;
+            
+            console.log(`[PuppeteerWorker ${this.id}] ✅ Assigned tab ${tab.id} to ${jobId}`);
+            console.log(`[PuppeteerWorker ${this.id}] 📊 Active: ${Array.from(this.processingJobs).join(', ')}`);
+        });
+
+        // ✅ Handle duplicate
+        if (isDuplicate) {
+            this.sendResponse(messageId, {
+                jobId: jobId,
+                duplicate: true,
+                error: 'Already processing',
+                success: false
+            });
+            return;
+        }
+        
+        // ✅ Handle no tab
+        if (!tab) {
+            this.sendResponse(messageId, {
+                jobId: jobId,
+                error: 'No tabs available',
+                success: false
+            });
+            return;
+        }
+
+        // ✅ STEP 2: Scrape WITH MUTEX RELEASED (CONCURRENT)
+        // Mutex is released - other jobs can get other tabs!
+        try {
+            console.log(`[PuppeteerWorker ${this.id}] 🌐 Scraping ${jobId} on ${tab.id} (concurrent)`);
+            
             const scrapedData = await this.scrapeWithTab(tab, url, jobId, exchange, contract);
             
-            // ✅ Send response back via parentPort (orchestrator will handle it)
-            if (parentPort) {
-                parentPort.postMessage({
-                    type: 'SCRAPE_RESPONSE',
-                    messageId: messageId,
-                    payload: {
-                        jobId: jobId,
-                        url: url,
-                        exchange: exchange,
-                        contract: contract,
-                        scrapedData: scrapedData,
-                        success: true,
-                        timestamp: Date.now()
-                    }
-                });
-                console.log(`[PuppeteerWorker ${this.id}] 📤 Sent SCRAPE_RESPONSE for ${jobId}`);
-            }
+            this.sendResponse(messageId, {
+                jobId: jobId,
+                url: url,
+                exchange: exchange,
+                contract: contract,
+                scrapedData: scrapedData,
+                success: true
+            });
+            
+            console.log(`[PuppeteerWorker ${this.id}] ✅ Completed ${jobId} on ${tab.id}`);
             
         } catch (error) {
             console.error(`[PuppeteerWorker ${this.id}] ❌ Scrape failed:`, error.message);
             
-            if (parentPort) {
-                parentPort.postMessage({
-                    type: 'SCRAPE_RESPONSE',
-                    messageId: messageId,
-                    payload: {
-                        jobId: jobId,
-                        url: url,
-                        exchange: exchange,
-                        contract: contract,
-                        error: error.message,
-                        success: false,
-                        timestamp: Date.now()
-                    }
-                });
-            }
+            this.sendResponse(messageId, {
+                jobId: jobId,
+                error: error.message,
+                success: false
+            });
+            
+        } finally {
+            // ✅ STEP 3: Release tab (ACQUIRE MUTEX AGAIN - FAST)
+            await namedMutex.execute(`tab_pool_${this.id}`, () => {
+                this.processingJobs.delete(jobId);
+                this.tabAssignments.delete(jobId);
+                if (tab) {
+                    tab.assignedJobId = null;
+                    tab.status = 'idle';
+                }
+                console.log(`[PuppeteerWorker ${this.id}] ✅ Released ${jobId}`);
+                console.log(`[PuppeteerWorker ${this.id}] 📊 Active: ${Array.from(this.processingJobs).join(', ')}`);
+            });
         }
     }
 
-    getAvailableTab() {
+    /**
+     * ✅ Get available tab with atomic check
+     */
+    getAvailableTab(jobId) {
+        // Check if job already has a tab
+        if (this.tabAssignments.has(jobId)) {
+            const existingTabId = this.tabAssignments.get(jobId);
+            const existingTab = this.tabPool.find(t => t.id === existingTabId);
+            if (existingTab && existingTab.status === 'busy') {
+                console.log(`[PuppeteerWorker ${this.id}] Job ${jobId} already on ${existingTabId}`);
+                return null;
+            }
+        }
+        
+        // Find idle tab
         for (const tab of this.tabPool) {
-            if (tab.status === 'idle') {
+            if (tab.status === 'idle' && !tab.assignedJobId) {
                 tab.status = 'busy';
-                console.log(`[PuppeteerWorker ${this.id}] ✅ Got tab: ${tab.id}`);
+                console.log(`[PuppeteerWorker ${this.id}] ✅ Got tab: ${tab.id} for ${jobId}`);
                 return tab;
             }
         }
+        
+        // Log tab statuses
+        const statuses = this.tabPool.map(t => `${t.id}:${t.status}(${t.assignedJobId || 'none'})`).join(', ');
+        console.log(`[PuppeteerWorker ${this.id}] 📊 Tab statuses: ${statuses}`);
         return null;
     }
 
-    async waitForAvailableTab(timeout = 30000) {
-        const start = Date.now();
-        while (Date.now() - start < timeout) {
-            const tab = this.getAvailableTab();
-            if (tab) return tab;
-            await this.sleep(100);
+    /**
+     * Send response back
+     */
+    sendResponse(messageId, payload) {
+        if (parentPort) {
+            parentPort.postMessage({
+                type: 'SCRAPE_RESPONSE',
+                messageId: messageId,
+                payload: payload,
+                timestamp: Date.now()
+            });
         }
-        return null;
     }
 
+    /**
+     * ✅ Scrape with tab - releases tab back to pool
+     */
     async scrapeWithTab(tab, url, jobId, exchange, contract) {
         console.log(`[PuppeteerWorker ${this.id}] 🌐 Scraping ${jobId} on ${tab.id}`);
         
         if (!url) {
             tab.status = 'idle';
+            tab.assignedJobId = null;
             throw new Error('No URL provided');
         }
 
@@ -243,10 +318,13 @@ class PuppeteerWorker {
         try {
             const currentUrl = page.url();
             if (currentUrl !== url && currentUrl !== 'about:blank') {
+                console.log(`[PuppeteerWorker ${this.id}] 🔄 Navigating to ${url} on ${tab.id}`);
                 await page.goto(url, { waitUntil: 'networkidle2', timeout: this.timeout });
             } else if (currentUrl === url) {
+                console.log(`[PuppeteerWorker ${this.id}] ♻️ Reusing existing page on ${tab.id}`);
                 await page.reload({ waitUntil: 'networkidle2' });
             } else {
+                console.log(`[PuppeteerWorker ${this.id}] 🌐 Navigating to ${url} on ${tab.id}`);
                 await page.goto(url, { waitUntil: 'networkidle2', timeout: this.timeout });
             }
             
@@ -279,8 +357,7 @@ class PuppeteerWorker {
                 };
             });
             
-            // ✅ Release tab back to pool
-            tab.status = 'idle';
+            // ✅ Release tab back to pool (status already set in finally block)
             tab.currentUrl = url;
             tab.lastUsed = Date.now();
             tab.stats.scraped++;
@@ -304,7 +381,7 @@ class PuppeteerWorker {
             };
             
         } catch (error) {
-            tab.status = 'idle';
+            console.error(`[PuppeteerWorker ${this.id}] ❌ Error scraping ${jobId}:`, error.message);
             throw error;
         }
     }
@@ -317,8 +394,10 @@ class PuppeteerWorker {
             page.setDefaultTimeout(this.timeout);
             page.setDefaultNavigationTimeout(this.timeout);
             await page.goto('about:blank', { waitUntil: 'load' });
+            
             tab.page = page;
             tab.status = 'idle';
+            tab.assignedJobId = null;
             tab.currentUrl = null;
             tab.lastUsed = Date.now();
             console.log(`[PuppeteerWorker ${this.id}] ✅ Tab recycled`);
@@ -346,6 +425,8 @@ class PuppeteerWorker {
         
         this.tabs = [];
         this.tabPool = [];
+        this.processingJobs.clear();
+        this.tabAssignments.clear();
         
         if (parentPort) {
             parentPort.postMessage({

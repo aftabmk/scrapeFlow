@@ -7,7 +7,7 @@ const { namedMutex } = require('../utils/mutex');
 class WorkerPool extends EventEmitter {
     constructor(options = {}) {
         super();
-        
+
         this.options = {
             minWorkers: options.minWorkers || 1,
             maxWorkers: options.maxWorkers || 4,
@@ -16,12 +16,12 @@ class WorkerPool extends EventEmitter {
             orchestrator: options.orchestrator || null,
             ...options,
         };
-        
+
         this.workers = new Map();
         this.workerAssignments = new Map();
         this.forwardingJobs = new Set();
         this.processingBatches = new Set();
-        
+
         this.workerTypes = {
             sqlite: {
                 script: path.join(__dirname, '../sqlite/worker.js'),
@@ -54,17 +54,17 @@ class WorkerPool extends EventEmitter {
                 description: 'Exports data'
             },
         };
-        
+
         this.stats = {
             created: 0,
             destroyed: 0,
             restarted: 0,
             errors: 0,
         };
-        
+
         this._shuttingDown = false;
         this._shutdownComplete = false;
-        
+
         console.log('[WorkerPool] Initialized');
     }
 
@@ -73,38 +73,38 @@ class WorkerPool extends EventEmitter {
             console.log('[WorkerPool] Cannot start: already shutting down');
             return this;
         }
-        
+
         console.log('[WorkerPool] Starting...');
-        
+
         for (const [type, config] of Object.entries(this.workerTypes)) {
             for (let i = 0; i < config.count; i++) {
                 await this.createWorker(type);
             }
         }
-        
+
         console.log(`[WorkerPool] Started with ${this.workers.size} workers`);
         return this;
     }
 
     async createWorker(type) {
         if (this._shuttingDown || this._shutdownComplete) return null;
-        
+
         const config = this.workerTypes[type];
         if (!config) {
             console.error(`[WorkerPool] Unknown worker type: ${type}`);
             return null;
         }
-        
+
         const workerPath = config.script;
         const workerId = `worker_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
-        
+
         try {
             const fs = require('fs');
             if (!fs.existsSync(workerPath)) {
                 console.error(`[WorkerPool] Worker script not found: ${workerPath}`);
                 return null;
             }
-            
+
             const worker = new Worker(workerPath, {
                 workerData: {
                     type,
@@ -120,7 +120,7 @@ class WorkerPool extends EventEmitter {
                     timeout: parseInt(process.env.PUPPETEER_TIMEOUT) || 30000,
                 }
             });
-            
+
             const info = {
                 id: workerId,
                 worker,
@@ -131,21 +131,21 @@ class WorkerPool extends EventEmitter {
                 errors: 0,
                 currentTask: null,
             };
-            
+
             this.workers.set(workerId, info);
             this.stats.created++;
-            
+
             if (this.options.loadBalancer) {
                 this.options.loadBalancer.registerWorker(worker, type);
             }
-            
+
             worker.on('message', (message) => this.handleWorkerMessage(workerId, message));
             worker.on('error', (error) => this.handleWorkerError(workerId, error));
             worker.on('exit', (code) => this.handleWorkerExit(workerId, code));
-            
+
             console.log(`[WorkerPool] Created ${type} worker: ${workerId}`);
             return info;
-            
+
         } catch (error) {
             console.error(`[WorkerPool] Failed to create worker ${type}:`, error.message);
             return null;
@@ -155,25 +155,25 @@ class WorkerPool extends EventEmitter {
     handleWorkerMessage(workerId, message) {
         const info = this.workers.get(workerId);
         if (!info) return;
-        
+
         // Forward to orchestrator
         if (this.options.orchestrator) {
             this.options.orchestrator.handleWorkerMessage(workerId, message);
         }
-        
+
         this.emit('worker.message', workerId, message);
-        
+
         switch (message.type) {
             case 'task.complete':
                 info.processed++;
                 info.status = 'idle';
                 info.currentTask = null;
-                
+
                 // Release worker assignment
                 if (message.result && message.result.jobId) {
                     this.releaseWorker(workerId, message.result.jobId);
                 }
-                
+
                 if (this.options.loadBalancer) {
                     this.options.loadBalancer.handleWorkerResponse(workerId, {
                         ...message,
@@ -182,16 +182,16 @@ class WorkerPool extends EventEmitter {
                     });
                 }
                 break;
-                
+
             case 'task.failed':
                 info.errors++;
                 info.status = 'idle';
                 info.currentTask = null;
-                
+
                 if (message.result && message.result.jobId) {
                     this.releaseWorker(workerId, message.result.jobId);
                 }
-                
+
                 if (this.options.loadBalancer) {
                     this.options.loadBalancer.handleWorkerResponse(workerId, {
                         ...message,
@@ -200,72 +200,83 @@ class WorkerPool extends EventEmitter {
                     });
                 }
                 break;
-                
+
             case 'worker.ready':
                 info.status = 'idle';
                 console.log(`[WorkerPool] Worker ${workerId} (${info.type}) ready`);
                 break;
-                
+
             case 'worker.shutdown':
                 console.log(`[WorkerPool] Worker ${workerId} shutting down`);
                 this.workers.delete(workerId);
                 break;
-                
+
             // ✅ System messages - broadcast
             case 'SQLITE_READY':
                 console.log(`[WorkerPool] ✅ SQLite ready: ${workerId}`);
                 this.broadcastToWorkers(message);
                 this.emit('sqlite.ready', message);
                 break;
-                
+
             case 'SQLITE_RESPONSE':
                 this.broadcastToWorkers(message);
                 break;
-                
+
             case 'SQLITE_ERROR':
                 console.error(`[WorkerPool] ❌ SQLite error:`, message.error);
                 this.broadcastToWorkers(message);
                 break;
-            
+
             case 'PUPPETEER_READY':
                 console.log(`[WorkerPool] ✅ Puppeteer ready: ${workerId}`);
                 this.broadcastToWorkers(message);
                 this.emit('puppeteer.ready', message);
                 break;
-                
+
             case 'PUPPETEER_ERROR':
                 console.error(`[WorkerPool] ❌ Puppeteer error:`, message.error);
                 this.broadcastToWorkers(message);
                 break;
-            
+
             // ✅ SCRAPE_REQUEST - forward with mutex
             case 'SCRAPE_REQUEST':
                 this.handleScrapeRequest(workerId, message);
                 break;
-            
+
             // ✅ SCRAPE_RESPONSE - handled by orchestrator
             case 'SCRAPE_RESPONSE':
                 // Already handled by orchestrator
                 break;
-                
+
             case 'submitter.started':
                 console.log(`[WorkerPool] Submitter started: ${message.payload.totalJobs} jobs`);
                 break;
-                
+
             case 'submitter.complete':
                 console.log(`[WorkerPool] Submitter complete: ${message.payload.totalJobs} jobs`);
                 break;
-                
+
             case 'job.complete':
                 console.log(`[WorkerPool] ✅ Job complete: ${message.payload.jobId}`);
                 this.emit('job.complete', message.payload);
                 break;
-                
+
             case 'job.failed':
                 console.error(`[WorkerPool] ❌ Job failed: ${message.payload.jobId}`);
                 this.emit('job.failed', message.payload);
                 break;
-                
+            case 'SQLITE_RESPONSE':
+                // ✅ Forward SQLite responses to orchestrator
+                if (this.options.orchestrator) {
+                    this.options.orchestrator.handleWorkerMessage(workerId, message);
+                }
+                break;
+
+            case 'SQLITE_READY':
+                console.log(`[WorkerPool] ✅ SQLite ready: ${workerId}`);
+                this.broadcastToWorkers(message);
+                this.emit('sqlite.ready', message);
+                break;
             default:
                 break;
         }
@@ -274,26 +285,37 @@ class WorkerPool extends EventEmitter {
     /**
      * ✅ Handle scrape request with mutex to prevent duplicates
      */
+    // workers/worker-pool.js - Updated handleScrapeRequest
+
+    // workers/worker-pool.js - Updated handleScrapeRequest
+
     handleScrapeRequest(workerId, message) {
         const { messageId, payload, batchId } = message;
         const jobId = payload?.jobId;
-        
-        // ✅ Check if batch is already being processed
+
+        // ✅ Check if this specific batch is already being processed
         if (batchId && this.processingBatches.has(batchId)) {
             console.log(`[WorkerPool] ⚠️ Batch ${batchId} already processing, ignoring duplicate`);
             this.sendDuplicateResponse(workerId, messageId, jobId);
             return;
         }
-        
+
+        // ✅ Check if this specific job is already being forwarded
+        if (jobId && this.forwardingJobs.has(jobId)) {
+            console.log(`[WorkerPool] ⚠️ Job ${jobId} already being forwarded, skipping duplicate`);
+            this.sendDuplicateResponse(workerId, messageId, jobId);
+            return;
+        }
+
         // ✅ Use mutex for forwarding
         namedMutex.execute(`forward_scrape_${jobId}`, async () => {
-            // ✅ Check if this job is already being forwarded
+            // ✅ Double-check inside mutex
             if (jobId && this.forwardingJobs.has(jobId)) {
-                console.log(`[WorkerPool] ⚠️ Job ${jobId} already being forwarded, skipping duplicate`);
+                console.log(`[WorkerPool] ⚠️ Job ${jobId} already being forwarded (mutex), skipping`);
                 this.sendDuplicateResponse(workerId, messageId, jobId);
                 return;
             }
-            
+
             // ✅ Mark as forwarding
             if (jobId) {
                 this.forwardingJobs.add(jobId);
@@ -301,19 +323,19 @@ class WorkerPool extends EventEmitter {
             if (batchId) {
                 this.processingBatches.add(batchId);
             }
-            
+
             try {
                 // Forward to puppeteer worker
                 const puppeteerWorker = this.getWorker('puppeteer');
                 if (puppeteerWorker) {
                     puppeteerWorker.worker.postMessage(message);
-                    console.log(`[WorkerPool] ✅ Forwarded SCRAPE_REQUEST for ${jobId} to puppeteer`);
+                    console.log(`[WorkerPool] ✅ Forwarded SCRAPE_REQUEST for ${jobId} to puppeteer (${batchId})`);
                 } else {
                     console.error(`[WorkerPool] ❌ No puppeteer worker available`);
                     this.sendErrorResponse(workerId, messageId, jobId, 'No puppeteer worker available');
                 }
             } finally {
-                // Release forwarding lock after a delay (to allow processing)
+                // ✅ Release forwarding lock
                 setTimeout(() => {
                     if (jobId) {
                         this.forwardingJobs.delete(jobId);
@@ -322,7 +344,7 @@ class WorkerPool extends EventEmitter {
                         this.processingBatches.delete(batchId);
                     }
                     console.log(`[WorkerPool] ✅ Released forwarding locks for ${jobId}`);
-                }, 1000);
+                }, 2000);
             }
         });
     }
@@ -372,12 +394,12 @@ class WorkerPool extends EventEmitter {
     getWorker(type, jobId) {
         const workers = Array.from(this.workers.values());
         const available = workers.filter(w => w.type === type && w.status === 'idle');
-        
+
         if (available.length === 0) {
             console.log(`[WorkerPool] ⚠️ No available ${type} workers`);
             return null;
         }
-        
+
         // ✅ Check if this job already has a worker assigned
         if (jobId) {
             const assignedWorkerId = this.workerAssignments.get(jobId);
@@ -391,15 +413,15 @@ class WorkerPool extends EventEmitter {
                 }
             }
         }
-        
+
         // Round-robin selection
         const worker = available[0];
         worker.status = 'busy';
-        
+
         if (jobId) {
             this.workerAssignments.set(jobId, worker.id);
         }
-        
+
         console.log(`[WorkerPool] ✅ Assigned ${worker.id} (${type}) to job ${jobId || 'unknown'}`);
         return worker;
     }
@@ -413,7 +435,7 @@ class WorkerPool extends EventEmitter {
             info.status = 'idle';
             info.currentTask = null;
         }
-        
+
         if (jobId) {
             this.workerAssignments.delete(jobId);
             console.log(`[WorkerPool] ✅ Released worker ${workerId} from job ${jobId}`);
@@ -466,11 +488,11 @@ class WorkerPool extends EventEmitter {
     handleWorkerError(workerId, error) {
         const info = this.workers.get(workerId);
         if (!info) return;
-        
+
         this.stats.errors++;
         console.error(`[WorkerPool] Worker ${workerId} (${info.type}) error:`, error.message);
         this.emit('worker.error', { workerId, error: error.message });
-        
+
         if (!this._shuttingDown) {
             this.restartWorker(workerId);
         }
@@ -479,15 +501,15 @@ class WorkerPool extends EventEmitter {
     handleWorkerExit(workerId, code) {
         const info = this.workers.get(workerId);
         if (!info) return;
-        
+
         console.log(`[WorkerPool] Worker ${workerId} (${info.type}) exited with code ${code}`);
         this.stats.destroyed++;
         this.emit('worker.exited', { workerId, code });
-        
+
         if (this.options.loadBalancer) {
             this.options.loadBalancer.unregisterWorker(workerId);
         }
-        
+
         if (!this._shuttingDown) {
             console.log(`[WorkerPool] Restarting worker ${workerId} (${info.type})`);
             this.restartWorker(workerId);
@@ -501,38 +523,38 @@ class WorkerPool extends EventEmitter {
             console.log('[WorkerPool] Skipping restart: shutting down');
             return null;
         }
-        
+
         const info = this.workers.get(workerId);
         if (info) {
             type = info.type;
         }
-        
+
         if (!type) {
             console.warn(`[WorkerPool] Cannot restart worker ${workerId}: type unknown`);
             return null;
         }
-        
+
         console.log(`[WorkerPool] Restarting worker ${workerId} (${type})`);
-        
+
         if (this.workers.has(workerId)) {
             const oldInfo = this.workers.get(workerId);
             if (oldInfo && oldInfo.worker) {
                 try {
                     await oldInfo.worker.terminate();
-                } catch (err) {}
+                } catch (err) { }
             }
             this.workers.delete(workerId);
         }
-        
+
         if (this.options.loadBalancer) {
             this.options.loadBalancer.unregisterWorker(workerId);
         }
-        
+
         this.stats.restarted++;
         await this.sleep(1000);
-        
+
         if (this._shuttingDown || this._shutdownComplete) return null;
-        
+
         const newWorker = await this.createWorker(type);
         if (newWorker) {
             this.emit('worker.restarted', { oldId: workerId, newId: newWorker.id });
@@ -541,14 +563,14 @@ class WorkerPool extends EventEmitter {
             console.error(`[WorkerPool] Failed to restart worker ${workerId}`);
             this.emit('worker.restart.failed', { workerId });
         }
-        
+
         return newWorker;
     }
 
     getStats() {
         const workers = Array.from(this.workers.values());
         const byType = {};
-        
+
         for (const type of Object.keys(this.workerTypes)) {
             const list = workers.filter(w => w.type === type);
             byType[type] = {
@@ -557,7 +579,7 @@ class WorkerPool extends EventEmitter {
                 busy: list.filter(w => w.status === 'busy').length,
             };
         }
-        
+
         return {
             total: workers.length,
             byType,
@@ -578,20 +600,20 @@ class WorkerPool extends EventEmitter {
             console.log('[WorkerPool] Already shutting down...');
             return;
         }
-        
+
         if (this._shutdownComplete) {
             console.log('[WorkerPool] Shutdown already complete');
             return;
         }
-        
+
         this._shuttingDown = true;
         console.log('[WorkerPool] Shutting down...');
-        
+
         // Clear all tracking
         this.workerAssignments.clear();
         this.forwardingJobs.clear();
         this.processingBatches.clear();
-        
+
         const promises = [];
         for (const [id, info] of this.workers) {
             promises.push(
@@ -600,10 +622,10 @@ class WorkerPool extends EventEmitter {
                 })
             );
         }
-        
+
         await Promise.allSettled(promises);
         this.workers.clear();
-        
+
         this._shutdownComplete = true;
         console.log('[WorkerPool] Shutdown complete');
         this.emit('shutdown');

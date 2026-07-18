@@ -11,7 +11,8 @@ class BrowserWorker extends BaseWorker {
         this.pendingRequests = new Map();
         this.isProcessing = false;
         this.currentBatchId = null;
-        this.processedJobs = new Set(); // ✅ Track processed job IDs to prevent duplicates
+        this.processedJobs = new Set();
+        this.sentRequests = new Set();
         
         this.setupListeners();
     }
@@ -35,12 +36,7 @@ class BrowserWorker extends BaseWorker {
                     this.handleScrapeResponse(message);
                     break;
                     
-                case 'SQLITE_READY':
-                    // Silently ignore
-                    break;
-                    
                 default:
-                    // Ignore other messages
                     break;
             }
         });
@@ -54,12 +50,13 @@ class BrowserWorker extends BaseWorker {
         const pending = this.pendingRequests.get(messageId);
         if (pending) {
             if (payload.duplicate) {
-                console.log(`[${this.getDisplayName()}] ⚠️ Duplicate request detected, resolving with existing data`);
+                console.log(`[${this.getDisplayName()}] ⚠️ Duplicate request detected`);
                 pending.resolve({ success: false, duplicate: true, message: 'Already processing' });
             } else {
                 pending.resolve(payload);
             }
             this.pendingRequests.delete(messageId);
+            this.sentRequests.delete(messageId);
         } else {
             console.warn(`[${this.getDisplayName()}] ⚠️ No pending request for: ${messageId}`);
         }
@@ -99,7 +96,6 @@ class BrowserWorker extends BaseWorker {
     async executeTask(message) {
         const { taskId, payload } = message;
         
-        // ✅ Prevent concurrent processing
         if (this.isProcessing) {
             console.log(`[${this.getDisplayName()}] ⚠️ Already processing, ignoring duplicate`);
             return;
@@ -107,10 +103,9 @@ class BrowserWorker extends BaseWorker {
         
         this.isProcessing = true;
         this.currentTask = taskId;
-        this.currentBatchId = `batch_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`;
+        this.sentRequests.clear();
 
         try {
-            // Wait for puppeteer ready
             if (!this.puppeteerReady) {
                 console.log(`[${this.getDisplayName()}] ⏳ Waiting for puppeteer...`);
                 await this.waitForPuppeteer();
@@ -166,16 +161,21 @@ class BrowserWorker extends BaseWorker {
                 return;
             }
 
-            console.log(`[${this.getDisplayName()}] 📦 Received ${uniqueJobs.length} unique jobs (filtered from ${jobs.length})`);
+            console.log(`[${this.getDisplayName()}] 📦 Received ${uniqueJobs.length} unique jobs`);
 
-            // ✅ Send scrape requests concurrently
+            // ✅ Send ONE request per job with UNIQUE batch ID
             const scrapePromises = uniqueJobs.map((jobData) => {
                 const job = jobData.job || jobData;
                 const event = jobData.event || job.data;
                 const jobId = jobData.jobId || job.id;
                 
-                // ✅ Mark as processed
+                if (this.sentRequests.has(jobId)) {
+                    console.log(`[${this.getDisplayName()}] ⚠️ Request for ${jobId} already sent, skipping`);
+                    return Promise.resolve({ success: false, duplicate: true, jobId });
+                }
+                
                 this.processedJobs.add(jobId);
+                this.sentRequests.add(jobId);
                 
                 const scrapePayload = {
                     jobId: jobId,
@@ -188,8 +188,11 @@ class BrowserWorker extends BaseWorker {
                 
                 return new Promise((resolve, reject) => {
                     const messageId = `scrape_${jobId}_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`;
+                    // ✅ UNIQUE batch ID per job
+                    const batchId = `batch_${jobId}_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`;
                     
                     this.pendingRequests.set(messageId, { resolve, reject });
+                    this.sentRequests.add(messageId);
                     
                     const port = this.getParentPort();
                     if (port) {
@@ -198,9 +201,9 @@ class BrowserWorker extends BaseWorker {
                             messageId: messageId,
                             sourceWorkerId: this.id,
                             payload: scrapePayload,
-                            batchId: this.currentBatchId
+                            batchId: batchId  // ✅ UNIQUE per job
                         });
-                        console.log(`[${this.getDisplayName()}] 📤 Sent SCRAPE_REQUEST for ${jobId} (${messageId})`);
+                        console.log(`[${this.getDisplayName()}] 📤 Sent SCRAPE_REQUEST for ${jobId} (${batchId})`);
                     } else {
                         reject(new Error('No parentPort available'));
                     }
@@ -209,10 +212,10 @@ class BrowserWorker extends BaseWorker {
 
             console.log(`[${this.getDisplayName()}] ⏳ Waiting for ${scrapePromises.length} responses...`);
             
-            // ✅ Wait for all responses with timeout
+            // ✅ Wait for responses with timeout
             const timeoutPromise = new Promise((resolve) => {
                 setTimeout(() => {
-                    console.log(`[${this.getDisplayName()}] ⚠️ Timeout waiting for responses, continuing with partial results`);
+                    console.log(`[${this.getDisplayName()}] ⚠️ Timeout waiting for responses`);
                     resolve(null);
                 }, 45000);
             });
@@ -222,7 +225,6 @@ class BrowserWorker extends BaseWorker {
                 timeoutPromise
             ]);
             
-            // Handle timeout
             if (puppeteerResponses === null) {
                 puppeteerResponses = scrapePromises.map(() => ({ 
                     status: 'rejected', 
@@ -248,7 +250,7 @@ class BrowserWorker extends BaseWorker {
             const successful = results.filter(r => r && r.success).length;
             console.log(`[${this.getDisplayName()}] ✅ Received ${successful}/${results.length} successful responses`);
 
-            // Combine results with original jobs
+            // Combine results
             const processedJobs = uniqueJobs.map((jobData, index) => {
                 const job = jobData.job || jobData;
                 const scrapedData = results[index];
@@ -268,8 +270,6 @@ class BrowserWorker extends BaseWorker {
             this.processed += processedJobs.length;
             
             console.log(`[${this.getDisplayName()}] 📤 Sending ${processedJobs.length} jobs to Exporter`);
-            
-            // ✅ Send to exporter
             this.routeBatch(taskId, processedJobs, 'browser', 'exporter');
 
         } catch (error) {
@@ -283,6 +283,7 @@ class BrowserWorker extends BaseWorker {
             this.currentTask = null;
             this.isProcessing = false;
             this.currentBatchId = null;
+            this.sentRequests.clear();
         }
     }
 }

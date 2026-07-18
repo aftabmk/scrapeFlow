@@ -9,7 +9,7 @@ const WorkerPool = require('../workers/worker-pool');
 class Orchestrator extends EventEmitter {
   constructor(config = {}) {
     super();
-    
+
     this.config = config;
     this.components = {};
     this.isRunning = false;
@@ -19,22 +19,22 @@ class Orchestrator extends EventEmitter {
     this.startTime = null;
     this._shuttingDown = false;
     this._shutdownComplete = false;
-    
+
     // ✅ Pending requests map for orchestrator-managed communication
     this.pendingRequests = new Map();
-    
+
     this.initComponents();
     this.setupEventListeners();
     this.setupWorkerCommunication();
-    
+
     console.log('[Orchestrator] Initialized');
     console.log(`[Orchestrator] Mode: Memory-first (SQLite & Puppeteer as workers)`);
   }
 
   initComponents() {
     this.components.eventBus = new EventBus();
-    this.components.stateManager = new StateManager({ 
-      checkpointInterval: this.config.health?.heartbeatInterval || 5000 
+    this.components.stateManager = new StateManager({
+      checkpointInterval: this.config.health?.heartbeatInterval || 5000
     });
     this.components.queueManager = new QueueManager({
       visibilityTimeout: this.config.queues?.visibilityTimeout || 30000,
@@ -46,7 +46,7 @@ class Orchestrator extends EventEmitter {
       workerTimeout: this.config.health?.heartbeatTimeout || 30000,
       batchSize: this.config.queues?.batchSize || 50,
     });
-    
+
     // ✅ WorkerPool manages ALL workers with orchestrator reference
     this.components.workerPool = new WorkerPool({
       minWorkers: this.config.workers?.min || 4,
@@ -72,30 +72,30 @@ class Orchestrator extends EventEmitter {
    */
   handleWorkerMessage(workerId, message) {
     if (!message || !message.type) return;
-    
+
     switch (message.type) {
       case 'SCRAPE_REQUEST':
         this.handleScrapeRequest(workerId, message);
         break;
-        
+
       case 'SCRAPE_RESPONSE':
         this.handleScrapeResponse(workerId, message);
         break;
-        
+
       case 'PUPPETEER_READY':
         this.puppeteerReady = true;
         console.log('[Orchestrator] ✅ Puppeteer ready');
         this.components.stateManager.update('health.puppeteer', 'healthy');
         this.emit('puppeteer.ready', message);
         break;
-        
+
       case 'PUPPETEER_ERROR':
         console.error('[Orchestrator] ❌ Puppeteer error:', message.error);
         this.puppeteerReady = false;
         this.components.stateManager.update('health.puppeteer', 'unhealthy');
         this.emit('puppeteer.error', message);
         break;
-        
+
       default:
         // Ignore other messages (handled elsewhere)
         break;
@@ -105,20 +105,38 @@ class Orchestrator extends EventEmitter {
   /**
    * ✅ Handle scrape request from browser worker
    */
+
+  // core/orchestrator.js - Updated handleScrapeRequest and handleScrapeResponse
+
+  // core/orchestrator.js - Updated handleScrapeRequest
+
   handleScrapeRequest(workerId, message) {
-    const { messageId, payload, sourceWorkerId } = message;
+    const { messageId, payload, sourceWorkerId, batchId } = message;
     const { jobId, url } = payload || {};
     const targetWorkerId = sourceWorkerId || workerId;
-    
-    console.log(`[Orchestrator] 📥 Received SCRAPE_REQUEST from ${targetWorkerId} for ${jobId}`);
-    
+
+    // ✅ Check for duplicate batch (now each job has unique batchId)
+    if (batchId && this._processingBatches?.has(batchId)) {
+      console.log(`[Orchestrator] ⚠️ Batch ${batchId} already processing, ignoring duplicate`);
+      return;
+    }
+
+    // ✅ Check for duplicate job
+    if (jobId && this._processingJobs?.has(jobId)) {
+      console.log(`[Orchestrator] ⚠️ Job ${jobId} already processing, ignoring duplicate`);
+      return;
+    }
+
+    console.log(`[Orchestrator] 📥 Received SCRAPE_REQUEST from ${targetWorkerId} for ${jobId} (${batchId})`);
+
     // ✅ Store pending request with timeout
     const timeout = setTimeout(() => {
       if (this.pendingRequests.has(messageId)) {
         this.pendingRequests.delete(messageId);
+        if (this._processingJobs) this._processingJobs.delete(jobId);
+        if (this._processingBatches) this._processingBatches.delete(batchId);
         console.error(`[Orchestrator] ⏰ Timeout for ${messageId} (${jobId})`);
-        
-        // Send timeout response back to browser worker
+
         this.components.workerPool.sendToWorker(targetWorkerId, {
           type: 'SCRAPE_RESPONSE',
           messageId: messageId,
@@ -130,45 +148,58 @@ class Orchestrator extends EventEmitter {
           }
         });
       }
-    }, 30000);
-    
+    }, 45000);
+
+    // ✅ Track processing
+    if (!this._processingJobs) this._processingJobs = new Set();
+    if (!this._processingBatches) this._processingBatches = new Set();
+    this._processingJobs.add(jobId);
+    if (batchId) this._processingBatches.add(batchId);
+
     this.pendingRequests.set(messageId, {
       workerId: targetWorkerId,
       timeout: timeout,
-      timestamp: Date.now()
+      timestamp: Date.now(),
+      jobId: jobId,
+      batchId: batchId
     });
-    
+
     // ✅ Forward to puppeteer worker
     this.components.workerPool.forwardToWorker('puppeteer', {
       ...message,
       sourceWorkerId: targetWorkerId,
     });
-    
+
     console.log(`[Orchestrator] 📤 Forwarded SCRAPE_REQUEST to puppeteer for ${jobId}`);
   }
 
-  /**
-   * ✅ Handle scrape response from puppeteer worker
-   */
   handleScrapeResponse(workerId, message) {
     const { messageId, payload } = message;
-    
+
     console.log(`[Orchestrator] 📥 Received SCRAPE_RESPONSE for ${messageId}`);
-    
+
     const pending = this.pendingRequests.get(messageId);
     if (pending) {
       // ✅ Clear timeout
       clearTimeout(pending.timeout);
       this.pendingRequests.delete(messageId);
-      
-      // ✅ Send response back to the original browser worker
+
+      // ✅ Clean up tracking
+      if (pending.jobId && this._processingJobs) {
+        this._processingJobs.delete(pending.jobId);
+      }
+      if (pending.batchId && this._processingBatches) {
+        this._processingBatches.delete(pending.batchId);
+      }
+
+      // ✅ Send response back to browser worker
       this.components.workerPool.sendToWorker(pending.workerId, {
         type: 'SCRAPE_RESPONSE',
         messageId: messageId,
         payload: payload
       });
-      
-      console.log(`[Orchestrator] 📤 Sent SCRAPE_RESPONSE back to browser worker ${pending.workerId}`);
+
+      console.log(`[Orchestrator] 📤 Sent SCRAPE_RESPONSE back to ${pending.workerId}`);
     } else {
       console.warn(`[Orchestrator] ⚠️ No pending request for ${messageId}`);
     }
@@ -176,63 +207,76 @@ class Orchestrator extends EventEmitter {
 
   setupEventListeners() {
     const { eventBus, queueManager, stateManager, workerPool } = this.components;
-    
-    // SQLite events from worker
+
+    // ✅ SQLite events from worker
     workerPool.on('sqlite.ready', (event) => {
       console.log('[Orchestrator] SQLite ready - enabling persistence');
       this.sqliteReady = true;
       this.memoryMode = false;
-      queueManager.setPersistence(this.components.sqlite);
+
+      // ✅ Pass SQLite worker to QueueManager for persistence
+      const sqliteWorker = workerPool.getWorker('sqlite');
+      if (sqliteWorker) {
+        queueManager.setPersistence(sqliteWorker.worker);
+      }
+
       stateManager.update('system.status', 'running');
       stateManager.update('health.sqlite', 'healthy');
       this.emit('sqlite.ready', event);
     });
-    
+
+    // Listen for SQLite responses
+    workerPool.on('worker.message', (workerId, message) => {
+      if (message.type === 'SQLITE_RESPONSE') {
+        queueManager.handleSQLiteResponse(message);
+      }
+    });
+
     // Job events
     eventBus.subscribe('job.submitted', async (event) => {
       const { job, queue } = event;
       queueManager.enqueue(queue || 'submitter', job);
-      stateManager.updateJob(job.id, { 
-        status: 'pending', 
-        queue: queue || 'submitter' 
+      stateManager.updateJob(job.id, {
+        status: 'pending',
+        queue: queue || 'submitter'
       });
       this.emit('job.submitted', event);
     });
-    
+
     eventBus.subscribe('job.queued', (event) => {
-      stateManager.updateJob(event.jobId, { 
-        status: 'queued', 
-        queue: event.queue 
+      stateManager.updateJob(event.jobId, {
+        status: 'queued',
+        queue: event.queue
       });
       this.emit('job.queued', event);
     });
-    
+
     eventBus.subscribe('job.dequeued', (event) => {
-      stateManager.updateJob(event.jobId, { 
-        status: 'processing', 
-        workerId: event.workerId 
+      stateManager.updateJob(event.jobId, {
+        status: 'processing',
+        workerId: event.workerId
       });
       this.emit('job.dequeued', event);
     });
-    
+
     eventBus.subscribe('job.acked', (event) => {
       stateManager.updateJob(event.jobId, { status: 'completed' });
       this.emit('job.acked', event);
     });
-    
+
     eventBus.subscribe('job.failed', (event) => {
-      stateManager.updateJob(event.jobId, { 
-        status: 'failed', 
-        error: event.error 
+      stateManager.updateJob(event.jobId, {
+        status: 'failed',
+        error: event.error
       });
       this.emit('job.failed', event);
     });
-    
+
     eventBus.subscribe('job.deadletter', (event) => {
       stateManager.updateJob(event.jobId, { status: 'deadletter' });
       this.emit('job.deadletter', event);
     });
-    
+
     // Worker events
     eventBus.subscribe('worker.registered', (event) => {
       stateManager.updateWorker(event.workerId, {
@@ -242,18 +286,18 @@ class Orchestrator extends EventEmitter {
       });
       this.emit('worker.registered', event);
     });
-    
+
     // Pipeline events
     eventBus.subscribe('pipeline.started', (event) => {
       stateManager.update('pipeline.status', 'running');
       this.emit('pipeline.started', event);
     });
-    
+
     eventBus.subscribe('pipeline.completed', (event) => {
       stateManager.update('pipeline.status', 'completed');
       this.emit('pipeline.completed', event);
     });
-    
+
     // Health events
     eventBus.subscribe('health.check', () => {
       this.checkHealth();
@@ -265,48 +309,48 @@ class Orchestrator extends EventEmitter {
       console.log('[Orchestrator] Cannot start: already shutting down or complete');
       return this;
     }
-    
+
     this.isRunning = true;
     this.startTime = Date.now();
     console.log('[Orchestrator] Starting...');
     console.log(`[Orchestrator] Events: ${events.length}`);
-    
+
     this.components.stateManager.update('system.status', 'starting');
     this.components.stateManager.update('system.startTime', this.startTime);
-    
+
     // ✅ Start ALL workers (including SQLite and Puppeteer)
     await Promise.all([
       this.components.workerPool.start(),
       this.components.loadBalancer.startProcessing(),
     ]);
-    
-    this.components.eventBus.publish('system.ready', { 
-      timestamp: Date.now(), 
-      version: this.config.app?.version || '3.0.0' 
+
+    this.components.eventBus.publish('system.ready', {
+      timestamp: Date.now(),
+      version: this.config.app?.version || '3.0.0'
     });
-    
+
     this.components.stateManager.update('system.status', 'ready');
     this.isRunning = true;
-    
+
     console.log('[Orchestrator] Started (SQLite & Puppeteer initializing as workers)');
     console.log('[Orchestrator] Jobs can be processed immediately!');
-    
+
     if (events.length > 0) {
       await this.startPipeline(events);
     }
-    
+
     return this;
   }
 
   async startPipeline(events) {
     if (this._shuttingDown || this._shutdownComplete) return;
-    
+
     console.log(`[Orchestrator] 🚀 Starting pipeline with ${events.length} events`);
     this.components.eventBus.publish('pipeline.started', {
       events: events.length,
       timestamp: Date.now()
     });
-    
+
     const task = {
       type: 'execute',
       workerType: 'submitter',
@@ -319,9 +363,9 @@ class Orchestrator extends EventEmitter {
       },
       priority: 'high',
     };
-    
+
     const taskId = this.components.loadBalancer.enqueue(task);
-    
+
     if (taskId) {
       console.log(`[Orchestrator] 📤 Enqueued start_submitting task: ${taskId}`);
     } else {
@@ -337,15 +381,15 @@ class Orchestrator extends EventEmitter {
         });
       }
     }
-    
+
     this.emit('pipeline.started', { events });
   }
 
   async submitJob(job) {
     if (this._shuttingDown || this._shutdownComplete) return null;
-    
+
     const { queueManager, stateManager, loadBalancer } = this.components;
-    
+
     const jobId = job.id || `job_${Date.now()}`;
     const jobData = {
       id: jobId,
@@ -354,10 +398,10 @@ class Orchestrator extends EventEmitter {
       status: 'pending',
       submittedAt: Date.now()
     };
-    
+
     stateManager.updateJob(jobId, jobData);
     queueManager.enqueue('submitter', jobData);
-    
+
     const task = {
       type: 'execute',
       workerType: 'submitter',
@@ -370,12 +414,12 @@ class Orchestrator extends EventEmitter {
       },
       priority: 'normal',
     };
-    
+
     const taskId = loadBalancer.enqueue(task);
     if (taskId) {
       console.log(`[Orchestrator] 📤 Enqueued submit_job task: ${taskId} for ${jobId}`);
     }
-    
+
     this.emit('job.submitted', { jobId, job: jobData });
     return jobId;
   }
@@ -400,7 +444,7 @@ class Orchestrator extends EventEmitter {
 
   checkHealth() {
     if (this._shuttingDown || this._shutdownComplete) return null;
-    
+
     const { stateManager, loadBalancer } = this.components;
     const health = {
       system: stateManager.getSystemStatus(),
@@ -415,7 +459,7 @@ class Orchestrator extends EventEmitter {
       pendingRequests: this.pendingRequests.size,
       timestamp: Date.now(),
     };
-    
+
     stateManager.update('health', health);
     this.components.eventBus.publish('health.report', health);
     this.emit('health.check', health);
@@ -444,15 +488,15 @@ class Orchestrator extends EventEmitter {
       await new Promise(resolve => setTimeout(resolve, 500));
       return;
     }
-    
+
     if (this._shutdownComplete) {
       console.log('[Orchestrator] Shutdown already complete');
       return;
     }
-    
+
     this._shuttingDown = true;
     console.log('[Orchestrator] Shutting down...');
-    
+
     try {
       // ✅ Clear all pending requests
       for (const [messageId, pending] of this.pendingRequests) {
@@ -460,7 +504,7 @@ class Orchestrator extends EventEmitter {
         console.log(`[Orchestrator] Clearing pending request: ${messageId}`);
       }
       this.pendingRequests.clear();
-      
+
       const safeShutdown = async (component, name) => {
         if (component && typeof component.shutdown === 'function') {
           try {
@@ -482,7 +526,7 @@ class Orchestrator extends EventEmitter {
       await safeShutdown(this.components.queueManager, 'QueueManager');
       await safeShutdown(this.components.stateManager, 'StateManager');
       await safeShutdown(this.components.eventBus, 'EventBus');
-      
+
       this._shutdownComplete = true;
       this._shuttingDown = false;
       console.log('[Orchestrator] Shutdown complete');
@@ -491,7 +535,7 @@ class Orchestrator extends EventEmitter {
       this._shuttingDown = false;
       throw error;
     }
-    
+
     this.emit('shutdown');
   }
 }
