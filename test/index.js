@@ -67,6 +67,7 @@ if (require.main === module) {
       console.log(`  Health: ${status.health.status}`);
       console.log(`  Mode: ${status.memoryMode ? 'Memory' : 'Durable'}`);
       console.log(`  SQLite: ${status.sqliteReady ? 'Ready' : 'Starting'}`);
+      console.log(`  Puppeteer: ${status.puppeteerReady ? 'Ready' : 'Starting'}`);
       console.log(`  Workers: ${status.workers.total || 0}`);
       
       if (events.length > 0) {
@@ -95,7 +96,7 @@ if (require.main === module) {
           console.error('[Index] ⚠️ Shutdown timeout, forcing exit...');
           process.exit(0);
         }
-      }, 5000);
+      }, 10000);
       
       if (!app._shuttingDown) {
         await app.shutdown();

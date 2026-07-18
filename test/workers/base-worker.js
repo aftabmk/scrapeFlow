@@ -23,11 +23,27 @@ class BaseWorker {
   }
 
   /**
+   * Get parent port safely
+   * Returns null if not in worker thread
+   */
+  getParentPort() {
+    return parentPort || null;
+  }
+
+  /**
+   * Check if running in worker thread
+   */
+  isWorkerThread() {
+    return !!parentPort;
+  }
+
+  /**
    * Send worker ready message to parent
    */
   sendReady() {
-    if (parentPort) {
-      parentPort.postMessage({
+    const port = this.getParentPort();
+    if (port) {
+      port.postMessage({
         type: 'worker.ready',
         workerId: this.id,
         workerType: this.type,
@@ -40,8 +56,9 @@ class BaseWorker {
    * Start listening for messages
    */
   start() {
-    if (parentPort) {
-      parentPort.on('message', async (message) => {
+    const port = this.getParentPort();
+    if (port) {
+      port.on('message', async (message) => {
         await this.handleMessage(message);
       });
     }
@@ -80,8 +97,9 @@ class BaseWorker {
    * Send task completion to parent
    */
   sendTaskComplete(taskId, result) {
-    if (parentPort) {
-      parentPort.postMessage({
+    const port = this.getParentPort();
+    if (port) {
+      port.postMessage({
         type: 'task.complete',
         taskId,
         result,
@@ -95,8 +113,9 @@ class BaseWorker {
    * Send task failure to parent
    */
   sendTaskFailed(taskId, error) {
-    if (parentPort) {
-      parentPort.postMessage({
+    const port = this.getParentPort();
+    if (port) {
+      port.postMessage({
         type: 'task.failed',
         taskId,
         error: error.message || error,
@@ -110,8 +129,9 @@ class BaseWorker {
    * Send job completion to parent
    */
   sendJobComplete(jobId, result) {
-    if (parentPort) {
-      parentPort.postMessage({
+    const port = this.getParentPort();
+    if (port) {
+      port.postMessage({
         type: 'job.complete',
         payload: {
           jobId,
@@ -126,8 +146,9 @@ class BaseWorker {
    * Send job failure to parent
    */
   sendJobFailed(jobId, stage, error) {
-    if (parentPort) {
-      parentPort.postMessage({
+    const port = this.getParentPort();
+    if (port) {
+      port.postMessage({
         type: 'job.failed',
         payload: {
           jobId,
@@ -241,8 +262,9 @@ class BaseWorker {
   shutdown() {
     console.log(`[${this.getDisplayName()}] Shutting down...`);
     this.isRunning = false;
-    if (parentPort) {
-      parentPort.postMessage({
+    const port = this.getParentPort();
+    if (port) {
+      port.postMessage({
         type: 'worker.shutdown',
         workerId: this.id,
         timestamp: Date.now()
